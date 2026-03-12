@@ -45,14 +45,17 @@ async def kv_get(key: str):
         return data.get("result")  # returns None if key doesn't exist
 
 async def kv_set(key: str, value: str):
-    """Write a key to Upstash Redis via REST API."""
+    """Write a key to Upstash Redis via REST API (Upstash REST format)."""
     if not UPSTASH_URL:
         return
     async with httpx.AsyncClient() as client:
         await client.post(
-            f"{UPSTASH_URL}/set/{key}",
-            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
-            json=[key, value],
+            UPSTASH_URL,
+            headers={
+                "Authorization": f"Bearer {UPSTASH_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=["SET", key, value],
             timeout=5,
         )
 
