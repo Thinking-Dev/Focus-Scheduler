@@ -26,8 +26,8 @@ app.add_middleware(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 APP_PASSWORD    = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS   = 6
-KV_URL = os.environ.get("KV_URL")
-redis_client = redis.from_url(KV_URL) if KV_URL else None
+REDIS_URL = os.environ.get("REDIS_URL")
+redis_client = redis.from_url(REDIS_URL) if REDIS_URL else None
 
 # ─── MASTER PROMPT ────────────────────────────────────────────────────────────
 # Paste your full school schedule and any custom AI instructions here.
