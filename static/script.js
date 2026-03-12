@@ -6,30 +6,29 @@ const RATE_LIMIT_MS = 5000;
 
 // ── State ──────────────────────────────────────────────────────────────────
 let schedule   = [];
-let serverTime = null;   // offset from server (ms)
+let serverTime = null;
 let lastSubmit = 0;
-let clockInterval, progressInterval;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $  = id => document.getElementById(id);
-const overlay      = $('password-overlay');
-const passwordInput = $('password-input');
-const unlockBtn    = $('unlock-btn');
-const lockError    = $('lock-error');
-const clockEl      = $('clock');
-const dateEl       = $('date-display');
-const taskEl       = $('current-task');
-const taskTimeEl   = $('task-time-range');
-const progressFill = $('progress-fill');
-const progressPct  = $('progress-pct');
-const progressLeft = $('progress-remaining');
-const commandInput = $('command-input');
-const submitBtn    = $('submit-btn');
-const aiStatus     = $('ai-status');
-const scheduleModal = $('schedule-modal');
-const scheduleList = $('schedule-list');
+const overlay          = $('password-overlay');
+const passwordInput    = $('password-input');
+const unlockBtn        = $('unlock-btn');
+const lockError        = $('lock-error');
+const clockEl          = $('clock');
+const dateEl           = $('date-display');
+const taskEl           = $('current-task');
+const taskTimeEl       = $('task-time-range');
+const progressFill     = $('progress-fill');
+const progressPct      = $('progress-pct');
+const progressLeft     = $('progress-remaining');
+const commandInput     = $('command-input');
+const submitBtn        = $('submit-btn');
+const aiStatus         = $('ai-status');
+const scheduleModal    = $('schedule-modal');
+const scheduleList     = $('schedule-list');
 const sessionIndicator = $('session-indicator');
-const toast        = $('toast');
+const toast            = $('toast');
 
 // ── Utility ────────────────────────────────────────────────────────────────
 function showToast(msg, duration = 2800) {
@@ -43,32 +42,19 @@ function timeToMinutes(hhmm) {
   return h * 60 + m;
 }
 
-function minutesToHHMM(mins) {
-  const h = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-}
-
 function formatDuration(minutes) {
-  if (minutes <= 0)  return 'Done';
-  if (minutes < 60)  return `${minutes}m left`;
+  if (minutes <= 0) return 'Done';
+  if (minutes < 60) return `${minutes}m left`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m ? `${h}h ${m}m left` : `${h}h left`;
 }
 
 function autoGrowTextarea() {
-  // 1. Briefly reset the height so it can shrink if the user deletes lines
   commandInput.style.height = 'auto';
-  
-  // 2. Set the new height based on its native scroll height (capped at 120px)
   commandInput.style.height = Math.min(commandInput.scrollHeight, 120) + 'px';
 }
-
-// Listen to input events
 commandInput.addEventListener('input', autoGrowTextarea);
-
-// Initial sizing
 autoGrowTextarea();
 
 // ── Session Auth ───────────────────────────────────────────────────────────
@@ -91,11 +77,10 @@ function clearSession() {
 function getToken() { return localStorage.getItem(SESSION_KEY); }
 
 function checkSessionExpiry() {
-  if (!isSessionValid() && !overlay.classList.contains('visible')) {
+  if (!isSessionValid() && !overlay.classList.contains('hidden')) {
     clearSession();
     showLock('Session expired. Please log in again.');
   }
-  // Update expiry indicator
   const exp = parseInt(localStorage.getItem(SESSION_EXP) || '0', 10);
   if (exp && isSessionValid()) {
     const minsLeft = Math.ceil((exp - Date.now()) / 60000);
@@ -144,8 +129,7 @@ async function attemptLogin() {
     saveSession(data.token, data.expires_in);
     hideLock();
     init();
-  } catch {
-    // Offline / API down — if we have a cached schedule, let them in (view-only)
+  } catch (err) {
     const cached = localStorage.getItem(SCHEDULE_KEY);
     if (cached) {
       lockError.textContent = 'Offline — loading cached schedule';
@@ -153,7 +137,7 @@ async function attemptLogin() {
       lockError.style.color = 'var(--warning)';
       setTimeout(() => { hideLock(); initOffline(); }, 1500);
     } else {
-      lockError.textContent = 'Cannot connect to server';
+      lockError.textContent = `Cannot connect to server: ${err.message}`;
       lockError.classList.add('visible');
     }
   } finally {
@@ -170,27 +154,23 @@ async function syncTime() {
   try {
     const res  = await fetch('/api/time');
     const data = await res.json();
-    // Store server's HH:MM for task matching
-    serverTime = data.time_24; // "HH:MM"
+    serverTime = data.time_24;
     return data;
   } catch {
     return null;
   }
 }
 
-// Returns current time as "HH:MM" using the synced server time (EST)
-// Falls back to local clock if server unreachable
 function getCurrentHHMM() {
   if (serverTime) return serverTime;
-  // Fallback: try to approximate EST
   const now = new Date();
-  const estOffset = -5 * 60; // EST UTC-5 (ignores DST for fallback)
+  const estOffset = -5 * 60;
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const estDate = new Date(utc + estOffset * 60000);
   return estDate.toTimeString().slice(0, 5);
 }
 
-// ── Clock & Ticker ─────────────────────────────────────────────────────────
+// ── Clock ──────────────────────────────────────────────────────────────────
 function startClock() {
   function tick() {
     const now = new Date();
@@ -216,7 +196,9 @@ function saveSchedule(s) {
 
 function getCurrentTask(hhmm) {
   const nowMins = timeToMinutes(hhmm);
+  const todayKey = new Date().toISOString().slice(0, 10);
   return schedule.find(item => {
+    if (item.date && item.date !== todayKey) return false;
     const s = timeToMinutes(item.start);
     const e = timeToMinutes(item.end);
     return nowMins >= s && nowMins < e;
@@ -244,11 +226,11 @@ function updateFocusUI() {
   taskEl.className   = '';
   taskTimeEl.textContent = `${task.start} – ${task.end}`;
 
-  const start = timeToMinutes(task.start);
-  const end   = timeToMinutes(task.end);
-  const total = end - start;
+  const start   = timeToMinutes(task.start);
+  const end     = timeToMinutes(task.end);
+  const total   = end - start;
   const elapsed = nowMins - start;
-  const pct = Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+  const pct     = Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
   const minsLeft = end - nowMins;
 
   progressFill.style.width = `${pct}%`;
@@ -259,8 +241,9 @@ function updateFocusUI() {
 
 // ── Schedule Modal ─────────────────────────────────────────────────────────
 function renderScheduleModal() {
-  const hhmm = getCurrentHHMM();
+  const hhmm    = getCurrentHHMM();
   const nowMins = timeToMinutes(hhmm);
+  const todayKey = new Date().toISOString().slice(0, 10);
   scheduleList.innerHTML = '';
 
   if (!schedule.length) {
@@ -268,19 +251,37 @@ function renderScheduleModal() {
     return;
   }
 
+  // Group by date
+  const byDate = {};
   schedule.forEach(item => {
-    const s = timeToMinutes(item.start);
-    const e = timeToMinutes(item.end);
-    const isCurrent = nowMins >= s && nowMins < e;
+    const d = item.date || todayKey;
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(item);
+  });
 
-    const el = document.createElement('div');
-    el.className = 'schedule-item' + (isCurrent ? ' current-item' : '');
-    el.innerHTML = `
-      <span class="item-time">${item.start} – ${item.end}</span>
-      <span class="item-dot"></span>
-      <span class="item-name">${item.task}</span>
-    `;
-    scheduleList.appendChild(el);
+  Object.keys(byDate).sort().forEach(date => {
+    // Date header
+    const header = document.createElement('div');
+    const isToday = date === todayKey;
+    const label = isToday ? 'Today' : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    header.style.cssText = 'font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-dim);padding:12px 16px 4px;';
+    header.textContent = label;
+    scheduleList.appendChild(header);
+
+    byDate[date].forEach(item => {
+      const s = timeToMinutes(item.start);
+      const e = timeToMinutes(item.end);
+      const isCurrent = isToday && nowMins >= s && nowMins < e;
+
+      const el = document.createElement('div');
+      el.className = 'schedule-item' + (isCurrent ? ' current-item' : '');
+      el.innerHTML = `
+        <span class="item-time">${item.start} – ${item.end}</span>
+        <span class="item-dot"></span>
+        <span class="item-name">${item.task}</span>
+      `;
+      scheduleList.appendChild(el);
+    });
   });
 }
 
@@ -290,7 +291,6 @@ $('see-schedule-btn').addEventListener('click', () => {
 });
 
 $('close-modal').addEventListener('click', () => scheduleModal.classList.remove('open'));
-
 scheduleModal.addEventListener('click', e => {
   if (e.target === scheduleModal) scheduleModal.classList.remove('open');
 });
@@ -308,7 +308,6 @@ async function submitCommand() {
   lastSubmit = Date.now();
   submitBtn.disabled = true;
   submitBtn.classList.add('loading');
-  aiStatus.textContent = 'Thinking…';
   aiStatus.className = '';
 
   let countdown = RATE_LIMIT_MS / 1000;
@@ -349,8 +348,6 @@ async function submitCommand() {
 
     aiStatus.textContent = 'Step 3/4: Reading AI response…';
     const text = await res.text();
-
-    // Show raw response length for debugging
     aiStatus.textContent = `Step 3/4: Response received (${text.length} chars)…`;
 
     const scheduleMarker = text.indexOf('__SCHEDULE__');
@@ -363,8 +360,7 @@ async function submitCommand() {
     }
 
     if (scheduleMarker === -1) {
-      // Show the raw response so we can see what came back
-      throw new Error(`No __SCHEDULE__ marker found. Raw response: "${text.slice(0, 300)}"`);
+      throw new Error(`No __SCHEDULE__ marker. Raw: "${text.slice(0, 200)}"`);
     }
 
     aiStatus.textContent = 'Step 4/4: Parsing schedule…';
@@ -379,53 +375,12 @@ async function submitCommand() {
     showToast('Schedule updated');
 
   } catch (err) {
-    // Show the REAL error on screen instead of generic message
     aiStatus.textContent = `❌ ${err.message}`;
     aiStatus.className = 'error';
     console.error('Full error:', err);
-
-    // Also show in a toast so it's hard to miss
-    showToast(err.message.slice(0, 80), 6000);
-
-    // Still try to load cache as fallback
+    showToast(err.message.slice(0, 100), 6000);
     loadCachedSchedule();
     if (schedule.length) updateFocusUI();
-  }
-}
-
-if (res.status === 401) { clearSession(); showLock('Session expired'); return; }
-
-const text = await res.text();
-const scheduleMarker = text.indexOf('__SCHEDULE__');
-const errorMarker = text.indexOf('__ERROR__');
-
-if (errorMarker !== -1) {
-  const err = JSON.parse(text.slice(errorMarker + 11));
-  throw new Error(err.detail);
-}
-if (scheduleMarker === -1) throw new Error('No response from AI');
-
-const data = JSON.parse(text.slice(scheduleMarker + 12));
-saveSchedule(data.schedule);
-updateFocusUI();
-commandInput.value = '';
-aiStatus.textContent = '✓ Schedule updated';
-aiStatus.className = 'success';
-setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
-showToast('Schedule updated');
-} catch (err) {
-    console.error('Full error:', err);
-    // Fallback: load from localStorage if available
-    loadCachedSchedule();
-    if (schedule.length) {
-      updateFocusUI();
-      aiStatus.textContent = 'AI offline — showing cached schedule';
-      aiStatus.className = 'error';
-    } else {
-      aiStatus.textContent = `Error: ${err.message}`;
-      aiStatus.className = 'error';
-    }
-    setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 5000);
   }
 }
 
@@ -437,20 +392,15 @@ commandInput.addEventListener('keydown', e => {
   }
 });
 
-// ── Init (authenticated) ───────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
   loadCachedSchedule();
-
-  // Sync server time, then start UI
   await syncTime();
   startClock();
   updateFocusUI();
-
-  // Re-sync server time every 30s, update UI every second
   setInterval(async () => { await syncTime(); }, 30000);
-  setInterval(updateFocusUI, 10000); // re-check current task every 10s
+  setInterval(updateFocusUI, 10000);
   setInterval(checkSessionExpiry, 60000);
-
   checkSessionExpiry();
 }
 
