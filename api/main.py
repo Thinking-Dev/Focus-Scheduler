@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import google.generativeai as genai
+from google import genai
 
 app = FastAPI()
 
@@ -123,8 +123,44 @@ async def update_schedule(req: UpdateRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-3-flash-preview")
+# Initialize the new Client
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # Build rolling log context
+    rolling_log.append(f"User command: {req.command}")
+    if len(rolling_log) > 20:
+        rolling_log.pop(0)
+
+    est = pytz.timezone("America/New_York")
+    now_est = datetime.now(est)
+    current_time_str = now_est.strftime("%A, %B %d %Y — %I:%M %p EST")
+    current_schedule_str = json.dumps(req.current_schedule, indent=2)
+    log_str = "\n".join(rolling_log[-10:])  # last 10 entries
+
+    prompt = f"""{MASTER_PROMPT}
+
+--- CURRENT TIME & DATE ---
+{current_time_str}
+
+--- CURRENT SCHEDULE ---
+{current_schedule_str}
+
+--- RECENT COMMAND LOG ---
+{log_str}
+
+--- USER'S LATEST COMMAND ---
+{req.command}
+
+Apply the user's command to the schedule. Return ONLY the updated JSON array.
+"""
+
+    try:
+        # Call generate_content using the new client syntax
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview", 
+            contents=prompt
+        )
+        raw = response.text.strip()
 
     # Build rolling log context
     rolling_log.append(f"User command: {req.command}")
