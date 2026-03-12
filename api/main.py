@@ -123,7 +123,7 @@ async def update_schedule(req: UpdateRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-# Initialize the new Client
+    # Initialize the new Client
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     # Build rolling log context
@@ -162,38 +162,6 @@ Apply the user's command to the schedule. Return ONLY the updated JSON array.
         )
         raw = response.text.strip()
 
-    # Build rolling log context
-    rolling_log.append(f"User command: {req.command}")
-    if len(rolling_log) > 20:
-        rolling_log.pop(0)
-
-    est = pytz.timezone("America/New_York")
-    now_est = datetime.now(est)
-    current_time_str = now_est.strftime("%A, %B %d %Y — %I:%M %p EST")
-    current_schedule_str = json.dumps(req.current_schedule, indent=2)
-    log_str = "\n".join(rolling_log[-10:])  # last 10 entries
-
-    prompt = f"""{MASTER_PROMPT}
-
---- CURRENT TIME & DATE ---
-{current_time_str}
-
---- CURRENT SCHEDULE ---
-{current_schedule_str}
-
---- RECENT COMMAND LOG ---
-{log_str}
-
---- USER'S LATEST COMMAND ---
-{req.command}
-
-Apply the user's command to the schedule. Return ONLY the updated JSON array.
-"""
-
-    try:
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
-
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -206,6 +174,8 @@ Apply the user's command to the schedule. Return ONLY the updated JSON array.
         # Validate structure
         for item in schedule:
             assert "task" in item and "start" in item and "end" in item
+
+        # Save AI schedule to database immediately
         if redis_client:
             redis_client.set("focus_schedule", json.dumps(schedule))
 
