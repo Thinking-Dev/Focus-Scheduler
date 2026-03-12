@@ -323,7 +323,7 @@ async function submitCommand() {
   }, 1000);
 
   try {
-    cconst res = await fetch('/api/update-schedule', {
+    const res = await fetch('/api/update-schedule', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
