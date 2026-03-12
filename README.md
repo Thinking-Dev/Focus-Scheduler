@@ -26,7 +26,7 @@ A minimalist AI-powered daily focus scheduler. Dark mode, glassmorphism UI, Gemi
 ### 1. Clone / fork this repo
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Thinking-Dev/Focus-Scheduler/
 cd focus-scheduler
 ```
 
