@@ -97,7 +97,7 @@ async def update_schedule(req: UpdateRequest):
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-3-flash-preview")
 
     # Build rolling log context
     rolling_log.append(f"User command: {req.command}")
