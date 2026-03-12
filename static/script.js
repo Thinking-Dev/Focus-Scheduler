@@ -354,7 +354,12 @@ async function submitCommand() {
 }
 
 submitBtn.addEventListener('click', submitCommand);
-commandInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitCommand(); });
+commandInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submitCommand();
+  }
+});
 
 // ── Init (authenticated) ───────────────────────────────────────────────────
 async function init() {
