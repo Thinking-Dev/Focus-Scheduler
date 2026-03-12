@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Focus Scheduler</title>
+
+  <!-- PWA Manifest (inline) -->
+  <link rel="manifest" href="data:application/json,{
+    %22name%22:%22Focus%20Scheduler%22,
+    %22short_name%22:%22Focus%22,
+    %22display%22:%22standalone%22,
+    %22background_color%22:%22%23080c12%22,
+    %22theme_color%22:%22%237ee8fa%22,
+    %22start_url%22:%22/%22
+  }" />
+  <meta name="theme-color" content="#080c12" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="AI-powered daily focus scheduler" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- ── Password Overlay ──────────────────────────────────────────────── -->
+<div id="password-overlay">
+  <div class="lock-card">
+    <div class="lock-icon">⬡</div>
+    <h2>Focus Scheduler</h2>
+    <input
+      type="password"
+      id="password-input"
+      placeholder="Enter password"
+      autocomplete="current-password"
+      spellcheck="false"
+    />
+    <button class="unlock-btn" id="unlock-btn">Unlock</button>
+    <div id="lock-error"></div>
+  </div>
+</div>
+
+<!-- ── Main App ───────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- Top Bar -->
+  <div id="top-bar">
+    <div id="clock">00:00:00</div>
+    <div id="date-display">Loading…</div>
+  </div>
+
+  <!-- Focus Area -->
+  <div id="focus-area">
+    <div id="task-card">
+      <div class="task-meta">
+        <span class="task-label">Now</span>
+        <span id="task-time-range"></span>
+      </div>
+
+      <div id="current-task" class="free-time">Free Time</div>
+
+      <div class="progress-wrap">
+        <div class="progress-row">
+          <span id="progress-pct" class="progress-pct">—</span>
+          <span id="progress-remaining" class="progress-remaining"></span>
+        </div>
+        <div id="progress-track">
+          <div id="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Command Bar -->
+  <div id="command-section">
+    <div id="command-wrap">
+      <input
+        type="text"
+        id="command-input"
+        placeholder="e.g. Move math to 7pm, add 30min break at 3pm…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="submit-btn">
+        <div class="btn-spinner"></div>
+        <span class="btn-label">Update</span>
+      </button>
+    </div>
+    <div id="ai-status"></div>
+  </div>
+
+  <!-- Footer -->
+  <div id="footer">
+    <button id="see-schedule-btn">See full schedule</button>
+    <div class="footer-dot"></div>
+    <span id="session-indicator"></span>
+  </div>
+
+</div>
+
+<!-- ── Schedule Modal ─────────────────────────────────────────────────── -->
+<div id="schedule-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Today's Schedule</h3>
+      <button id="close-modal">✕</button>
+    </div>
+    <div id="schedule-list"></div>
+  </div>
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<script src="/script.js"></script>
+</body>
+</html>
