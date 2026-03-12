@@ -159,7 +159,7 @@ Apply the user's command to the schedule. Return ONLY the updated JSON array.
     try:
         # Call generate_content using the new client syntax
         response = client.models.generate_content(
-            model="gemini-3-flash-preview", 
+            model="gemini-2.0-flash", 
             contents=prompt
         )
         raw = response.text.strip()
