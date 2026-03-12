@@ -56,6 +56,23 @@ function formatDuration(minutes) {
   const m = minutes % 60;
   return m ? `${h}h ${m}m left` : `${h}h left`;
 }
+const commandInput = $('command-input');
+const commandMirror = $('command-mirror');
+
+function autoGrowTextarea() {
+  // Copy text to mirror (including newlines)
+  commandMirror.textContent = commandInput.value;
+  
+  // Get mirror's height and apply to textarea
+  const newHeight = commandMirror.scrollHeight;
+  commandInput.style.height = Math.min(newHeight, 120) + 'px';
+}
+
+// Listen to input events
+commandInput.addEventListener('input', autoGrowTextarea);
+
+// Initial sizing
+autoGrowTextarea();
 
 // ── Session Auth ───────────────────────────────────────────────────────────
 function isSessionValid() {
