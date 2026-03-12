@@ -37,10 +37,15 @@ MASTER DATA
 School - 8:00-14:20 Mon - Fri
 Cello Lession - 17:00-17:45 Mon
 Gym - 15:30-17:30 - Tue, Thrus
+Robotics - 14:30-17:15 - Fri
 Korean School - 9:30-12:30 - Sat
-Saturday Fellowship - 18:30-22:00
+Saturday Fellowship - 18:30-22:00 - Sat
 Church - 11:30-12:30 Sun
 ]
+PERSONAL RULES
+Please make sure I have free time at the end of the day so that I can talk with friends and have fun.
+I would like to try and sleep at 23:00 however I am wiling to move what I have to do till 1:00 after that unless it is a big assignemnt please refrain from having to do things then.
+I would like to be able to have free time on Saturday and Sunday so if possible please make me work harder on the weekdays and work less on the weekends.
 
 CORE RULES
 1. OUTPUT FORMAT: Respond ONLY with a valid JSON array of objects. No prose, no "Here is your schedule."
