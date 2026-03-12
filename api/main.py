@@ -112,6 +112,9 @@ async def update_schedule(req: UpdateRequest):
 
     prompt = f"""{MASTER_PROMPT}
 
+--- CURRENT TIME & DATE ---
+{current_time_str}
+
 --- CURRENT SCHEDULE ---
 {current_schedule_str}
 
