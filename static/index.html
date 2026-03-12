@@ -78,19 +78,20 @@
 
   <!-- Command Bar -->
   <div id="command-section">
-    <div id="command-wrap">
-     <textarea
-        id="command-input"
-        placeholder="e.g. Move math to 7pm, add 30min break at 3pm… (Shift+Enter for new line)"
-        autocomplete="off"
-        spellcheck="false"
-        rows="1"
-        ></textarea>
-      <button id="submit-btn">
-        <div class="btn-spinner"></div>
-        <span class="btn-label">Update</span>
-      </button>
-    </div>
+  <div id="command-wrap">
+  <div id="command-mirror" style="display: none; position: absolute; white-space: pre-wrap; word-wrap: break-word; overflow: visible;">​</div>
+  <textarea
+    id="command-input"
+    placeholder="e.g. Move math to 7pm, add 30min break at 3pm… (Shift+Enter for new line)"
+    autocomplete="off"
+    spellcheck="false"
+    rows="1"
+  ></textarea>
+  <button id="submit-btn">
+    <div class="btn-spinner"></div>
+    <span class="btn-label">Update</span>
+  </button>
+</div>
     <div id="ai-status"></div>
   </div>
 
