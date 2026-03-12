@@ -323,36 +323,36 @@ async function submitCommand() {
   }, 1000);
 
   try {
-    const res = await fetch('/api/update-schedule', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: getToken(),
-        command: cmd,
-        current_schedule: schedule,
-      }),
-    });
+    cconst res = await fetch('/api/update-schedule', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    token: getToken(),
+    command: commandInput.value.trim(),
+    current_schedule: schedule,
+  }),
+});
 
-    if (res.status === 401) {
-      clearSession();
-      showLock('Session expired');
-      return;
-    }
+if (res.status === 401) { clearSession(); showLock('Session expired'); return; }
 
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Server error');
-    }
+const text = await res.text();
+const scheduleMarker = text.indexOf('__SCHEDULE__');
+const errorMarker = text.indexOf('__ERROR__');
 
-    const data = await res.json();
-    saveSchedule(data.schedule);
-    updateFocusUI();
-    commandInput.value = '';
-    autoGrowTextarea();
-    aiStatus.textContent = '✓ Schedule updated';
-    aiStatus.className = 'success';
-    setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
-    showToast('Schedule updated');
+if (errorMarker !== -1) {
+  const err = JSON.parse(text.slice(errorMarker + 11));
+  throw new Error(err.detail);
+}
+if (scheduleMarker === -1) throw new Error('No response from AI');
+
+const data = JSON.parse(text.slice(scheduleMarker + 12));
+saveSchedule(data.schedule);
+updateFocusUI();
+commandInput.value = '';
+aiStatus.textContent = '✓ Schedule updated';
+aiStatus.className = 'success';
+setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
+showToast('Schedule updated');
   } catch (err) {
     // Fallback: load from localStorage if available
     loadCachedSchedule();
