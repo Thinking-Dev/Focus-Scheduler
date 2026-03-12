@@ -311,7 +311,6 @@ async function submitCommand() {
   aiStatus.textContent = 'Thinking…';
   aiStatus.className = '';
 
-  // Rate limit countdown
   let countdown = RATE_LIMIT_MS / 1000;
   const timer = setInterval(() => {
     countdown--;
@@ -323,15 +322,76 @@ async function submitCommand() {
   }, 1000);
 
   try {
+    aiStatus.textContent = 'Step 1/4: Sending request…';
+
     const res = await fetch('/api/update-schedule', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    token: getToken(),
-    command: commandInput.value.trim(),
-    current_schedule: schedule,
-  }),
-});
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: getToken(),
+        command: cmd,
+        current_schedule: schedule,
+      }),
+    });
+
+    aiStatus.textContent = `Step 2/4: Got HTTP ${res.status}…`;
+
+    if (res.status === 401) {
+      clearSession();
+      showLock('Session expired — please log in again');
+      return;
+    }
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
+
+    aiStatus.textContent = 'Step 3/4: Reading AI response…';
+    const text = await res.text();
+
+    // Show raw response length for debugging
+    aiStatus.textContent = `Step 3/4: Response received (${text.length} chars)…`;
+
+    const scheduleMarker = text.indexOf('__SCHEDULE__');
+    const errorMarker    = text.indexOf('__ERROR__');
+
+    if (errorMarker !== -1) {
+      const errJson = text.slice(errorMarker + 9);
+      const err = JSON.parse(errJson);
+      throw new Error(`AI Error: ${err.detail}`);
+    }
+
+    if (scheduleMarker === -1) {
+      // Show the raw response so we can see what came back
+      throw new Error(`No __SCHEDULE__ marker found. Raw response: "${text.slice(0, 300)}"`);
+    }
+
+    aiStatus.textContent = 'Step 4/4: Parsing schedule…';
+    const data = JSON.parse(text.slice(scheduleMarker + 12));
+    saveSchedule(data.schedule);
+    updateFocusUI();
+    commandInput.value = '';
+    autoGrowTextarea();
+    aiStatus.textContent = '✓ Schedule updated';
+    aiStatus.className = 'success';
+    setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
+    showToast('Schedule updated');
+
+  } catch (err) {
+    // Show the REAL error on screen instead of generic message
+    aiStatus.textContent = `❌ ${err.message}`;
+    aiStatus.className = 'error';
+    console.error('Full error:', err);
+
+    // Also show in a toast so it's hard to miss
+    showToast(err.message.slice(0, 80), 6000);
+
+    // Still try to load cache as fallback
+    loadCachedSchedule();
+    if (schedule.length) updateFocusUI();
+  }
+}
 
 if (res.status === 401) { clearSession(); showLock('Session expired'); return; }
 
