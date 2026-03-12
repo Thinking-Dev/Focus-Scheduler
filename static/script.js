@@ -348,6 +348,7 @@ async function submitCommand() {
     saveSchedule(data.schedule);
     updateFocusUI();
     commandInput.value = '';
+    autoGrowTextarea();
     aiStatus.textContent = '✓ Schedule updated';
     aiStatus.className = 'success';
     setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
