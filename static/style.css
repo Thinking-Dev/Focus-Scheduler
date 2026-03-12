@@ -389,6 +389,10 @@ body::after {
   font-family: var(--font);
   font-size: 0.95rem;
   letter-spacing: 0.01em;
+  resize: none;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 #command-input::placeholder { color: var(--text-dim); }
