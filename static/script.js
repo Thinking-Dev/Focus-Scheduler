@@ -56,16 +56,13 @@ function formatDuration(minutes) {
   const m = minutes % 60;
   return m ? `${h}h ${m}m left` : `${h}h left`;
 }
-const commandInput = $('command-input');
-const commandMirror = $('command-mirror');
 
 function autoGrowTextarea() {
-  // Copy text to mirror (including newlines)
-  commandMirror.textContent = commandInput.value;
+  // 1. Briefly reset the height so it can shrink if the user deletes lines
+  commandInput.style.height = 'auto';
   
-  // Get mirror's height and apply to textarea
-  const newHeight = commandMirror.scrollHeight;
-  commandInput.style.height = Math.min(newHeight, 120) + 'px';
+  // 2. Set the new height based on its native scroll height (capped at 120px)
+  commandInput.style.height = Math.min(commandInput.scrollHeight, 120) + 'px';
 }
 
 // Listen to input events
