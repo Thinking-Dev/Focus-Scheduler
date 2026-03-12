@@ -104,6 +104,9 @@ async def update_schedule(req: UpdateRequest):
     if len(rolling_log) > 20:
         rolling_log.pop(0)
 
+    est = pytz.timezone("America/New_York")
+    now_est = datetime.now(est)
+    current_time_str = now_est.strftime("%A, %B %d %Y — %I:%M %p EST")
     current_schedule_str = json.dumps(req.current_schedule, indent=2)
     log_str = "\n".join(rolling_log[-10:])  # last 10 entries
 
