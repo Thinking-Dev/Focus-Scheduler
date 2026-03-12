@@ -150,7 +150,7 @@ async def save_schedule(request: Request):
 
 @app.post("/api/update-schedule")
 async def update_schedule(req: UpdateRequest):
-    if not validate_token(req.token):
+    if not await validate_token(req.token):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
