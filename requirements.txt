@@ -1,6 +1,6 @@
 fastapi==0.111.0
 uvicorn==0.29.0
-google-generativeai>=0.8.0
+google-genai
 pytz==2024.1
 python-multipart==0.0.9
 redis
