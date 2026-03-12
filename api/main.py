@@ -86,7 +86,26 @@ def validate_token(token: str) -> bool:
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+@app.get("/api/schedule")
+async def get_schedule():
+    """Fetches the synced schedule from the cloud database."""
+    if not redis_client:
+        return []
+    
+    data = redis_client.get("focus_schedule")
+    if data:
+        return json.loads(data)
+    return []
 
+@app.post("/api/schedule")
+async def manual_save_schedule(request: Request):
+    """Saves the schedule to the cloud database when updated locally."""
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Database not connected")
+        
+    schedule_data = await request.json()
+    redis_client.set("focus_schedule", json.dumps(schedule_data))
+    return {"success": True}
 @app.post("/api/login")
 async def login(req: LoginRequest):
     if req.password != APP_PASSWORD:
@@ -151,6 +170,8 @@ Apply the user's command to the schedule. Return ONLY the updated JSON array.
         # Validate structure
         for item in schedule:
             assert "task" in item and "start" in item and "end" in item
+        if redis_client:
+            redis_client.set("focus_schedule", json.dumps(schedule))
 
         return {"schedule": schedule, "log": rolling_log[-5:]}
 
