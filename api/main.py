@@ -1,16 +1,16 @@
 import os
 import json
 import secrets
-import redis
+import httpx
 from datetime import datetime, timedelta
-from typing import Optional
 import pytz
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from google import genai
+from google.genai import types
 
 app = FastAPI()
 
@@ -24,47 +24,71 @@ app.add_middleware(
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-APP_PASSWORD    = os.environ.get("APP_PASSWORD", "focus123")
-SESSION_HOURS   = 6
+APP_PASSWORD   = os.environ.get("APP_PASSWORD", "focus123")
+SESSION_HOURS  = 6
 
-# Connect to Vercel KV Database securely
-KV_URL = os.environ.get("KV_URL")
-redis_client = redis.from_url(KV_URL) if KV_URL else None
+# ─── Upstash Redis (REST-based, works on Vercel serverless) ───────────────────
+UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+
+async def kv_get(key: str):
+    """Read a key from Upstash Redis via REST API."""
+    if not UPSTASH_URL:
+        return None
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{UPSTASH_URL}/get/{key}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            timeout=5,
+        )
+        data = r.json()
+        return data.get("result")  # returns None if key doesn't exist
+
+async def kv_set(key: str, value: str):
+    """Write a key to Upstash Redis via REST API."""
+    if not UPSTASH_URL:
+        return
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{UPSTASH_URL}/set/{key}",
+            headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+            json=[key, value],
+            timeout=5,
+        )
 
 # ─── MASTER PROMPT ────────────────────────────────────────────────────────────
 MASTER_PROMPT = """
-You are a highly efficient personal scheduler. Your job is to manage a rolling daily schedule for a high school student in EST (Eastern Standard Time).
+You are a highly efficient personal scheduler. Your job is to manage a MULTI-DAY rolling schedule for a high school student in EST (Eastern Standard Time).
 
-MASTER DATA
-[
-School - 8:00-14:20 Mon - Fri
-Cello Lession - 17:00-17:45 Mon
-Gym - 15:30-17:30 - Tue, Thrus
-Robotics - 14:30-17:15 - Fri
-Korean School - 9:30-12:30 - Sat
-Saturday Fellowship - 18:30-22:00 - Sat
-Church - 11:30-12:30 Sun
-]
+FIXED WEEKLY SCHEDULE
+- School: 08:00–14:20, Mon–Fri
+- Cello Lesson: 17:00–17:45, Monday
+- Gym: 15:30–17:30, Tuesday & Thursday
+- Robotics: 14:30–17:15, Friday
+- Korean School: 09:30–12:30, Saturday
+- Saturday Fellowship: 18:30–22:00, Saturday
+- Church: 11:30–12:30, Sunday
+
 PERSONAL RULES
-Please make sure I have free time at the end of the day so that I can talk with friends and have fun.
-I would like to try and sleep at 23:00 however I am wiling to move what I have to do till 1:00 after that unless it is a big assignemnt please refrain from having to do things then.
-I would like to be able to have free time on Saturday and Sunday so if possible please make me work harder on the weekdays and work less on the weekends.
+- Always leave free time at the end of each day for friends and fun.
+- Target sleep at 23:00. Flexible up to 01:00 only for big assignments — nothing after 01:00.
+- Protect weekends: front-load hard work on weekdays so weekends feel lighter.
+- NEVER cram everything into one day. If a deadline is Friday, spread studying across Wed/Thu/Fri — not all on Monday.
+- For multi-day tasks (essays, test prep, projects): break them into small daily chunks leading up to the deadline.
+- Prioritize urgent + important tasks first. Deprioritize low-stakes tasks if the day is already full.
+- If the user finishes something early, compress or remove that block and give back free time.
 
-CORE RULES
-1. OUTPUT FORMAT: Respond ONLY with a valid JSON array of objects. No prose, no "Here is your schedule."
-   Format: [{"task": "String", "start": "HH:MM", "end": "HH:MM"}]
-2. TIME: Use a 24-hour clock (00:00 to 23:59).
-3. NO OVERLAPS: Tasks must be strictly sequential. If a new task is added that conflicts, you must adjust or shorten other flexible tasks (like "Free Time" or "Study") to fit it.
-4. ORDERING: Always sort the array by start time.
-5. LOGIC: If the user provides a "Task Dump," integrate those tasks into the existing Master Schedule.
-
-BEHAVIOR
-- The user might finish early or late or might get distracted. If this is the case try and prioitize things that is important and put things that doesn't need to be done to the othe side.
+OUTPUT FORMAT — CRITICAL
+- Respond ONLY with a valid JSON array. Zero prose. No markdown. No explanation.
+- Each item must have exactly: "task", "start", "end", and "date" fields.
+- Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
+- 24-hour time. No overlaps within a day. Sorted by date then start time.
+- When updating today's schedule, keep future days intact unless the user asks to change them.
 """
 
 # ─── In-memory session store ──────────────────────────────────────────────────
 sessions: dict[str, datetime] = {}
-rolling_log: list[str] = []  # stores recent schedule update messages
+rolling_log: list[str] = []
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
@@ -73,7 +97,7 @@ class LoginRequest(BaseModel):
 class UpdateRequest(BaseModel):
     token: str
     command: str
-    current_schedule: list  # current schedule from client
+    current_schedule: list
 
 def validate_token(token: str) -> bool:
     if token not in sessions:
@@ -96,24 +120,18 @@ async def login(req: LoginRequest):
 
 @app.get("/api/schedule")
 async def get_schedule():
-    """Fetches the synced schedule from the cloud database."""
-    if not redis_client:
-        return []
-    
-    data = redis_client.get("focus_schedule")
+    """Fetch the synced multi-day schedule from Upstash KV."""
+    data = await kv_get("focus_schedule")
     if data:
         return json.loads(data)
     return []
 
 
 @app.post("/api/schedule")
-async def manual_save_schedule(request: Request):
-    """Saves the schedule to the cloud database when updated locally."""
-    if not redis_client:
-        raise HTTPException(status_code=500, detail="Database not connected")
-        
+async def save_schedule(request: Request):
+    """Manually save a schedule to Upstash KV."""
     schedule_data = await request.json()
-    redis_client.set("focus_schedule", json.dumps(schedule_data))
+    await kv_set("focus_schedule", json.dumps(schedule_data))
     return {"success": True}
 
 
@@ -121,30 +139,29 @@ async def manual_save_schedule(request: Request):
 async def update_schedule(req: UpdateRequest):
     if not validate_token(req.token):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    # Initialize the new Client
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # Build rolling log context
-    rolling_log.append(f"User command: {req.command}")
+    rolling_log.append(f"User: {req.command}")
     if len(rolling_log) > 20:
         rolling_log.pop(0)
 
     est = pytz.timezone("America/New_York")
     now_est = datetime.now(est)
     current_time_str = now_est.strftime("%A, %B %d %Y — %I:%M %p EST")
+    today_str = now_est.strftime("%Y-%m-%d")
     current_schedule_str = json.dumps(req.current_schedule, indent=2)
-    log_str = "\n".join(rolling_log[-10:])  # last 10 entries
+    log_str = "\n".join(rolling_log[-10:])
 
     prompt = f"""{MASTER_PROMPT}
 
 --- CURRENT TIME & DATE ---
 {current_time_str}
+Today's date key: {today_str}
 
---- CURRENT SCHEDULE ---
+--- CURRENT MULTI-DAY SCHEDULE ---
 {current_schedule_str}
 
 --- RECENT COMMAND LOG ---
@@ -153,49 +170,66 @@ async def update_schedule(req: UpdateRequest):
 --- USER'S LATEST COMMAND ---
 {req.command}
 
-Apply the user's command to the schedule. Return ONLY the updated JSON array.
+Think carefully about spreading work across multiple days if deadlines are mentioned.
+Return ONLY the updated JSON array with all days included.
 """
 
-    try:
-        # Call generate_content using the new client syntax
-        response = client.models.generate_content(
-            model="gemini-2.0-flash", 
-            contents=prompt
-        )
-        raw = response.text.strip()
+    async def stream_response():
+        """Stream the Gemini response, accumulate, validate, save, then return."""
+        full_text = ""
+        try:
+            # Stream with low thinking + token cap to prevent timeouts
+            async for chunk in await client.aio.models.generate_content_stream(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=600,
+                    temperature=0.4,
+                ),
+            ):
+                if chunk.text:
+                    full_text += chunk.text
+                    # Send heartbeat so Vercel doesn't kill the connection
+                    yield " "
 
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+            # Clean up markdown fences
+            raw = full_text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
 
-        schedule = json.loads(raw)
+            schedule = json.loads(raw)
+            for item in schedule:
+                assert "task" in item and "start" in item and "end" in item
 
-        # Validate structure
-        for item in schedule:
-            assert "task" in item and "start" in item and "end" in item
+            # Backfill date = today for any items missing it (backward compat)
+            for item in schedule:
+                if "date" not in item:
+                    item["date"] = today_str
 
-        # Save AI schedule to database immediately
-        if redis_client:
-            redis_client.set("focus_schedule", json.dumps(schedule))
+            # Persist to Upstash
+            await kv_set("focus_schedule", json.dumps(schedule))
 
-        return {"schedule": schedule, "log": rolling_log[-5:]}
+            # Send the real payload at the end
+            yield "\n__SCHEDULE__" + json.dumps({"schedule": schedule, "log": rolling_log[-5:]})
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+        except Exception as e:
+            yield "\n__ERROR__" + json.dumps({"detail": str(e)})
+
+    return StreamingResponse(stream_response(), media_type="text/plain")
 
 
 @app.get("/api/time")
 async def get_time():
-    """Returns current time in EST for the UI."""
     est = pytz.timezone("America/New_York")
     now = datetime.now(est)
     return {
         "time": now.strftime("%H:%M:%S"),
         "date": now.strftime("%A, %B %d %Y"),
         "time_24": now.strftime("%H:%M"),
+        "date_key": now.strftime("%Y-%m-%d"),
     }
 
 
