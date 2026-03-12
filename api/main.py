@@ -90,8 +90,17 @@ OUTPUT FORMAT — CRITICAL
 """
 
 # ─── In-memory session store ──────────────────────────────────────────────────
-sessions: dict[str, datetime] = {}
-rolling_log: list[str] = []
+async def validate_token(token: str) -> bool:
+    if not token:
+        return False
+    data = await kv_get(f"session:{token}")
+    if not data:
+        return False
+    exp = datetime.fromisoformat(data)
+    if datetime.utcnow() > exp:
+        await kv_set(f"session:{token}", "")  # clean up
+        return False
+    return True
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
@@ -117,7 +126,8 @@ async def login(req: LoginRequest):
     if req.password != APP_PASSWORD:
         raise HTTPException(status_code=401, detail="Invalid password")
     token = secrets.token_hex(32)
-    sessions[token] = datetime.utcnow()
+    exp = datetime.utcnow() + timedelta(hours=SESSION_HOURS)
+    await kv_set(f"session:{token}", exp.isoformat())
     return {"token": token, "expires_in": SESSION_HOURS * 3600}
 
 
