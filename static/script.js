@@ -353,7 +353,8 @@ aiStatus.textContent = '✓ Schedule updated';
 aiStatus.className = 'success';
 setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
 showToast('Schedule updated');
-  } catch (err) {
+} catch (err) {
+    console.error('Full error:', err);
     // Fallback: load from localStorage if available
     loadCachedSchedule();
     if (schedule.length) {
