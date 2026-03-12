@@ -27,12 +27,11 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 APP_PASSWORD   = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS  = 6
 
-# ─── Upstash Redis (REST-based, works on Vercel serverless) ───────────────────
+# ─── Upstash Redis (REST-based, async, works on Vercel serverless) ────────────
 UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
 async def kv_get(key: str):
-    """Read a key from Upstash Redis via REST API."""
     if not UPSTASH_URL:
         return None
     async with httpx.AsyncClient() as client:
@@ -42,10 +41,9 @@ async def kv_get(key: str):
             timeout=5,
         )
         data = r.json()
-        return data.get("result")  # returns None if key doesn't exist
+        return data.get("result")
 
 async def kv_set(key: str, value: str):
-    """Write a key to Upstash Redis via REST API (Upstash REST format)."""
     if not UPSTASH_URL:
         return
     async with httpx.AsyncClient() as client:
@@ -64,45 +62,34 @@ MASTER_PROMPT = """
 You are a highly efficient personal scheduler. Your job is to manage a MULTI-DAY rolling schedule for a high school student in EST (Eastern Standard Time).
 
 FIXED WEEKLY SCHEDULE
-- School: 08:00–14:20, Mon–Fri
-- Cello Lesson: 17:00–17:45, Monday
-- Gym: 15:30–17:30, Tuesday & Thursday
-- Robotics: 14:30–17:15, Friday
-- Korean School: 09:30–12:30, Saturday
-- Saturday Fellowship: 18:30–22:00, Saturday
-- Church: 11:30–12:30, Sunday
+- School: 08:00-14:20, Mon-Fri
+- Cello Lesson: 17:00-17:45, Monday
+- Gym: 15:30-17:30, Tuesday & Thursday
+- Robotics: 14:30-17:15, Friday
+- Korean School: 09:30-12:30, Saturday
+- Saturday Fellowship: 18:30-22:00, Saturday
+- Church: 11:30-12:30, Sunday
 
 PERSONAL RULES
 - Always leave free time at the end of each day for friends and fun.
-- Target sleep at 23:00. Flexible up to 01:00 only for big assignments — nothing after 01:00.
-- Protect weekends: front-load hard work on weekdays so weekends feel lighter.
-- NEVER cram everything into one day. If a deadline is Friday, spread studying across Wed/Thu/Fri — not all on Monday.
-- For multi-day tasks (essays, test prep, projects): break them into small daily chunks leading up to the deadline.
-- Prioritize urgent + important tasks first. Deprioritize low-stakes tasks if the day is already full.
-- If the user finishes something early, compress or remove that block and give back free time.
+- Target sleep at 23:00. Flexible up to 01:00 only for big assignments.
+- Protect weekends: front-load hard work on weekdays.
+- NEVER cram everything into one day. Spread work across days leading up to deadlines.
+- For multi-day tasks: break into small daily chunks.
+- Prioritize urgent + important tasks first.
+- If the user finishes something early, give back free time.
 
-OUTPUT FORMAT — CRITICAL
+OUTPUT FORMAT - CRITICAL
 - Respond ONLY with a valid JSON array. Zero prose. No markdown. No explanation.
 - Each item must have exactly: "task", "start", "end", and "date" fields.
 - Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
 - 24-hour time. No overlaps within a day. Sorted by date then start time.
-- When updating today's schedule, keep future days intact unless the user asks to change them.
 """
 
-# ─── In-memory session store ──────────────────────────────────────────────────
-async def validate_token(token: str) -> bool:
-    if not token:
-        return False
-    data = await kv_get(f"session:{token}")
-    if not data:
-        return False
-    exp = datetime.fromisoformat(data)
-    if datetime.utcnow() > exp:
-        await kv_set(f"session:{token}", "")  # clean up
-        return False
-    return True
+# ─── Rolling log ──────────────────────────────────────────────────────────────
+rolling_log: list[str] = []
 
-# ─── Auth helpers ─────────────────────────────────────────────────────────────
+# ─── Pydantic models ──────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
     password: str
 
@@ -111,13 +98,18 @@ class UpdateRequest(BaseModel):
     command: str
     current_schedule: list
 
-def validate_token(token: str) -> bool:
-    if token not in sessions:
+# ─── Session helpers ──────────────────────────────────────────────────────────
+async def validate_token(token: str) -> bool:
+    if not token:
         return False
-    if datetime.utcnow() - sessions[token] > timedelta(hours=SESSION_HOURS):
-        del sessions[token]
+    data = await kv_get(f"session:{token}")
+    if not data:
         return False
-    return True
+    try:
+        exp = datetime.fromisoformat(data)
+        return datetime.utcnow() < exp
+    except Exception:
+        return False
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -133,7 +125,6 @@ async def login(req: LoginRequest):
 
 @app.get("/api/schedule")
 async def get_schedule():
-    """Fetch the synced multi-day schedule from Upstash KV."""
     data = await kv_get("focus_schedule")
     if data:
         return json.loads(data)
@@ -142,7 +133,6 @@ async def get_schedule():
 
 @app.post("/api/schedule")
 async def save_schedule(request: Request):
-    """Manually save a schedule to Upstash KV."""
     schedule_data = await request.json()
     await kv_set("focus_schedule", json.dumps(schedule_data))
     return {"success": True}
@@ -163,7 +153,7 @@ async def update_schedule(req: UpdateRequest):
 
     est = pytz.timezone("America/New_York")
     now_est = datetime.now(est)
-    current_time_str = now_est.strftime("%A, %B %d %Y — %I:%M %p EST")
+    current_time_str = now_est.strftime("%A, %B %d %Y - %I:%M %p EST")
     today_str = now_est.strftime("%Y-%m-%d")
     current_schedule_str = json.dumps(req.current_schedule, indent=2)
     log_str = "\n".join(rolling_log[-10:])
@@ -183,15 +173,13 @@ Today's date key: {today_str}
 --- USER'S LATEST COMMAND ---
 {req.command}
 
-Think carefully about spreading work across multiple days if deadlines are mentioned.
+Spread work across multiple days if deadlines are mentioned.
 Return ONLY the updated JSON array with all days included.
 """
 
     async def stream_response():
-        """Stream the Gemini response, accumulate, validate, save, then return."""
         full_text = ""
         try:
-            # Stream with low thinking + token cap to prevent timeouts
             async for chunk in await client.aio.models.generate_content_stream(
                 model="gemini-2.0-flash",
                 contents=prompt,
@@ -202,10 +190,8 @@ Return ONLY the updated JSON array with all days included.
             ):
                 if chunk.text:
                     full_text += chunk.text
-                    # Send heartbeat so Vercel doesn't kill the connection
                     yield " "
 
-            # Clean up markdown fences
             raw = full_text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
@@ -217,15 +203,12 @@ Return ONLY the updated JSON array with all days included.
             for item in schedule:
                 assert "task" in item and "start" in item and "end" in item
 
-            # Backfill date = today for any items missing it (backward compat)
             for item in schedule:
                 if "date" not in item:
                     item["date"] = today_str
 
-            # Persist to Upstash
             await kv_set("focus_schedule", json.dumps(schedule))
 
-            # Send the real payload at the end
             yield "\n__SCHEDULE__" + json.dumps({"schedule": schedule, "log": rolling_log[-5:]})
 
         except Exception as e:
@@ -251,5 +234,4 @@ async def health():
     return {"status": "ok"}
 
 
-# Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
