@@ -26,12 +26,12 @@ app.add_middleware(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 APP_PASSWORD    = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS   = 6
-REDIS_URL = os.environ.get("REDIS_URL")
-redis_client = redis.from_url(REDIS_URL) if REDIS_URL else None
+
+# Connect to Vercel KV Database securely
+KV_URL = os.environ.get("KV_URL")
+redis_client = redis.from_url(KV_URL) if KV_URL else None
 
 # ─── MASTER PROMPT ────────────────────────────────────────────────────────────
-# Paste your full school schedule and any custom AI instructions here.
-# This is injected into every Gemini request as the authoritative context.
 MASTER_PROMPT = """
 You are a highly efficient personal scheduler. Your job is to manage a rolling daily schedule for a high school student in EST (Eastern Standard Time).
 
@@ -66,7 +66,6 @@ BEHAVIOR
 sessions: dict[str, datetime] = {}
 rolling_log: list[str] = []  # stores recent schedule update messages
 
-
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
     password: str
@@ -84,8 +83,17 @@ def validate_token(token: str) -> bool:
         return False
     return True
 
-
 # ─── Routes ───────────────────────────────────────────────────────────────────
+
+@app.post("/api/login")
+async def login(req: LoginRequest):
+    if req.password != APP_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    token = secrets.token_hex(32)
+    sessions[token] = datetime.utcnow()
+    return {"token": token, "expires_in": SESSION_HOURS * 3600}
+
+
 @app.get("/api/schedule")
 async def get_schedule():
     """Fetches the synced schedule from the cloud database."""
@@ -97,6 +105,7 @@ async def get_schedule():
         return json.loads(data)
     return []
 
+
 @app.post("/api/schedule")
 async def manual_save_schedule(request: Request):
     """Saves the schedule to the cloud database when updated locally."""
@@ -106,13 +115,6 @@ async def manual_save_schedule(request: Request):
     schedule_data = await request.json()
     redis_client.set("focus_schedule", json.dumps(schedule_data))
     return {"success": True}
-@app.post("/api/login")
-async def login(req: LoginRequest):
-    if req.password != APP_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid password")
-    token = secrets.token_hex(32)
-    sessions[token] = datetime.utcnow()
-    return {"token": token, "expires_in": SESSION_HOURS * 3600}
 
 
 @app.post("/api/update-schedule")
