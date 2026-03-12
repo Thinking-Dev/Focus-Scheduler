@@ -181,7 +181,7 @@ Return ONLY the updated JSON array with all days included.
         full_text = ""
         try:
             async for chunk in await client.aio.models.generate_content_stream(
-                model="gemini-2.0-flash",
+                model="gemini-1.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     max_output_tokens=600,
