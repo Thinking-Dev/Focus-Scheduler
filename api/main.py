@@ -9,8 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from google import genai
-from google.genai import types
+from groq import AsyncGroq
 
 app = FastAPI()
 
@@ -23,11 +22,11 @@ app.add_middleware(
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-APP_PASSWORD   = os.environ.get("APP_PASSWORD", "focus123")
-SESSION_HOURS  = 6
+GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
+APP_PASSWORD  = os.environ.get("APP_PASSWORD", "focus123")
+SESSION_HOURS = 6
 
-# ─── Upstash Redis (REST-based, async, works on Vercel serverless) ────────────
+# ─── Upstash Redis ────────────────────────────────────────────────────────────
 UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
@@ -142,10 +141,10 @@ async def save_schedule(request: Request):
 async def update_schedule(req: UpdateRequest):
     if not await validate_token(req.token):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-    if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = AsyncGroq(api_key=GROQ_API_KEY)
 
     rolling_log.append(f"User: {req.command}")
     if len(rolling_log) > 20:
@@ -180,18 +179,21 @@ Return ONLY the updated JSON array with all days included.
     async def stream_response():
         full_text = ""
         try:
-            async for chunk in await client.aio.models.generate_content_stream(
-                model="gemini-1.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=600,
-                    temperature=0.4,
-                ),
-            ):
-                if chunk.text:
-                    full_text += chunk.text
-                    yield " "
+            stream = await client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.4,
+                stream=True,
+            )
 
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    full_text += content
+                    yield " "  # heartbeat to keep Vercel alive
+
+            # Strip markdown fences if present
             raw = full_text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
