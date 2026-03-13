@@ -306,17 +306,23 @@ scheduleModal.addEventListener('click', e => {
 async function submitCommand() {
   const cmd = commandInput.value.trim();
   if (!cmd) return;
+  
   if (Date.now() - lastSubmit < RATE_LIMIT_MS) {
     showToast('Please wait a moment before sending another request');
     return;
   }
-  if (!isSessionValid()) { showLock('Session expired'); return; }
+  
+  if (!isSessionValid()) { 
+    showLock('Session expired'); 
+    return; 
+  }
 
   lastSubmit = Date.now();
   submitBtn.disabled = true;
   submitBtn.classList.add('loading');
   aiStatus.className = '';
-
+  
+  // Rate limit cooldown timer
   let countdown = RATE_LIMIT_MS / 1000;
   const timer = setInterval(() => {
     countdown--;
@@ -328,7 +334,7 @@ async function submitCommand() {
   }, 1000);
 
   try {
-    aiStatus.textContent = 'Step 1/4: Sending request…';
+    aiStatus.textContent = 'Step 1/3: Sending request…';
 
     const res = await fetch('/api/update-schedule', {
       method: 'POST',
@@ -336,11 +342,11 @@ async function submitCommand() {
       body: JSON.stringify({
         token: getToken(),
         command: cmd,
-        current_schedule: schedule,
+        current_schedule: schedule, // Using your global schedule variable
       }),
     });
 
-    aiStatus.textContent = `Step 2/4: Got HTTP ${res.status}…`;
+    aiStatus.textContent = `Step 2/3: Got HTTP ${res.status}…`;
 
     if (res.status === 401) {
       clearSession();
@@ -349,56 +355,47 @@ async function submitCommand() {
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      // If Vercel/FastAPI throws an error, parse the JSON detail
+      const errData = await res.json();
+      throw new Error(`HTTP ${res.status}: ${errData.detail || 'Unknown server error'}`);
     }
 
-    aiStatus.textContent = 'Step 3/4: Reading AI response…';
-    const text = await res.text();
-    aiStatus.textContent = `Step 3/4: Response received (${text.length} chars)…`;
-
-    const scheduleMarker = text.indexOf('__SCHEDULE__');
-    const errorMarker    = text.indexOf('__ERROR__');
-
-    if (errorMarker !== -1) {
-      const errJson = text.slice(errorMarker + 9);
-      const err = JSON.parse(errJson);
-      throw new Error(`AI Error: ${err.detail}`);
+    aiStatus.textContent = 'Step 3/3: Updating schedule…';
+    
+    // Parse the clean JSON object sent by the new backend
+    const data = await res.json();
+    
+    if (!data.schedule) {
+        throw new Error("Backend returned success but no schedule data was found.");
     }
 
-    if (scheduleMarker === -1) {
-      throw new Error(`No __SCHEDULE__ marker. Raw: "${text.slice(0, 200)}"`);
-    }
-
-    aiStatus.textContent = 'Step 4/4: Parsing schedule…';
-    const data = JSON.parse(text.slice(scheduleMarker + 12));
+    // Save and update UI
     saveSchedule(data.schedule);
     updateFocusUI();
+    
+    // Cleanup UI
     commandInput.value = '';
     autoGrowTextarea();
     aiStatus.textContent = '✓ Schedule updated';
     aiStatus.className = 'success';
-    setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
     showToast('Schedule updated');
+    
+    setTimeout(() => { 
+        aiStatus.textContent = ''; 
+        aiStatus.className = ''; 
+    }, 3000);
 
   } catch (err) {
     aiStatus.textContent = `❌ ${err.message}`;
     aiStatus.className = 'error';
     console.error('Full error:', err);
     showToast(err.message.slice(0, 100), 6000);
+    
+    // Fallback to cache on error
     loadCachedSchedule();
     if (schedule.length) updateFocusUI();
   }
 }
-
-submitBtn.addEventListener('click', submitCommand);
-commandInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    submitCommand();
-  }
-});
-
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
   loadCachedSchedule();
