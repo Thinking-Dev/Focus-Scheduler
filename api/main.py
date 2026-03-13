@@ -71,6 +71,7 @@ PERSONAL RULES
 - Protect weekends, front-load work on weekdays.
 - NEVER cram everything into one day. Spread work across days leading up to deadlines.
 - Break multi-day tasks into small daily chunks.
+- When I say something is due on Friday I do not mean that the due date is Friday I mean that it needs to be finished by Friday. Meaning that it needs to be done on Thursday or before Friday.
 
 OUTPUT FORMAT - CRITICAL
 - Respond ONLY with a valid JSON array. Zero prose. No markdown. No explanation.
