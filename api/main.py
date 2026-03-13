@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import secrets
 import httpx
 from datetime import datetime, timedelta
@@ -164,7 +165,6 @@ Return ONLY the updated JSON array.
     async def stream_response():
         full_text = ""
         try:
-            # Call Groq directly via HTTP to avoid any import issues
             async with httpx.AsyncClient(timeout=30) as client:
                 async with client.stream(
                     "POST",
@@ -192,33 +192,29 @@ Return ONLY the updated JSON array.
                             except Exception:
                                 pass
 
-raw = full_text.strip()
+            # Clean the response
+            raw = full_text.strip()
+            if "```" in raw:
+                parts = raw.split("```")
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("json"):
+                        part = part[4:]
+                    part = part.strip()
+                    if part.startswith("["):
+                        raw = part
+                        break
 
-# Strip markdown fences
-if "```" in raw:
-    parts = raw.split("```")
-    for part in parts:
-        part = part.strip()
-        if part.startswith("json"):
-            part = part[4:]
-        part = part.strip()
-        if part.startswith("["):
-            raw = part
-            break
+            start_idx = raw.find("[")
+            end_idx = raw.rfind("]")
+            if start_idx == -1 or end_idx == -1:
+                raise Exception(f"No JSON array found. Raw: {raw[:200]}")
+            raw = raw[start_idx:end_idx+1]
 
-# Find the JSON array — grab everything from first [ to last ]
-start = raw.find("[")
-end = raw.rfind("]")
-if start == -1 or end == -1:
-    raise Exception(f"No JSON array found in response: {raw[:200]}")
-raw = raw[start:end+1]
+            raw = re.sub(r',\s*]', ']', raw)
+            raw = re.sub(r',\s*}', '}', raw)
 
-# Fix common JSON issues Groq sometimes produces
-import re
-raw = re.sub(r',\s*]', ']', raw)   # trailing commas in arrays
-raw = re.sub(r',\s*}', '}', raw)   # trailing commas in objects
-
-schedule = json.loads(raw)
+            schedule = json.loads(raw)
             for item in schedule:
                 assert "task" in item and "start" in item and "end" in item
 
