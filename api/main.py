@@ -192,14 +192,33 @@ Return ONLY the updated JSON array.
                             except Exception:
                                 pass
 
-            raw = full_text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            raw = raw.strip()
+raw = full_text.strip()
 
-            schedule = json.loads(raw)
+# Strip markdown fences
+if "```" in raw:
+    parts = raw.split("```")
+    for part in parts:
+        part = part.strip()
+        if part.startswith("json"):
+            part = part[4:]
+        part = part.strip()
+        if part.startswith("["):
+            raw = part
+            break
+
+# Find the JSON array — grab everything from first [ to last ]
+start = raw.find("[")
+end = raw.rfind("]")
+if start == -1 or end == -1:
+    raise Exception(f"No JSON array found in response: {raw[:200]}")
+raw = raw[start:end+1]
+
+# Fix common JSON issues Groq sometimes produces
+import re
+raw = re.sub(r',\s*]', ']', raw)   # trailing commas in arrays
+raw = re.sub(r',\s*}', '}', raw)   # trailing commas in objects
+
+schedule = json.loads(raw)
             for item in schedule:
                 assert "task" in item and "start" in item and "end" in item
 
