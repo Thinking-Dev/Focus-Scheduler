@@ -318,7 +318,10 @@ async function submitCommand() {
   }
 
   lastSubmit = Date.now();
+  
+  // 1. Lock UI while thinking
   submitBtn.disabled = true;
+  commandInput.disabled = true; 
   submitBtn.classList.add('loading');
   aiStatus.className = '';
   
@@ -342,7 +345,7 @@ async function submitCommand() {
       body: JSON.stringify({
         token: getToken(),
         command: cmd,
-        current_schedule: schedule, // Using your global schedule variable
+        current_schedule: schedule, 
       }),
     });
 
@@ -355,14 +358,12 @@ async function submitCommand() {
     }
 
     if (!res.ok) {
-      // If Vercel/FastAPI throws an error, parse the JSON detail
       const errData = await res.json();
       throw new Error(`HTTP ${res.status}: ${errData.detail || 'Unknown server error'}`);
     }
 
     aiStatus.textContent = 'Step 3/3: Updating schedule…';
     
-    // Parse the clean JSON object sent by the new backend
     const data = await res.json();
     
     if (!data.schedule) {
@@ -391,13 +392,53 @@ async function submitCommand() {
     console.error('Full error:', err);
     showToast(err.message.slice(0, 100), 6000);
     
-    // Fallback to cache on error
     loadCachedSchedule();
     if (schedule.length) updateFocusUI();
+  } finally {
+    // 2. GUARANTEE the text box unlocks, even if an error occurs
+    commandInput.disabled = false;
+    commandInput.focus();
   }
 }
 
-// ── Event Listeners (This connects the button to the code) ───────────────
+// ── Event Listeners ────────────────────────────────────────────────────────
+submitBtn.addEventListener('click', submitCommand);
+commandInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submitCommand();
+  }
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  loadCachedSchedule();
+  await syncTime();
+  startClock();
+  updateFocusUI();
+  setInterval(async () => { await syncTime(); }, 30000);
+  setInterval(updateFocusUI, 10000);
+  setInterval(checkSessionExpiry, 60000);
+  checkSessionExpiry();
+}
+
+function initOffline() {
+  loadCachedSchedule();
+  startClock();
+  updateFocusUI();
+  setInterval(updateFocusUI, 10000);
+  submitBtn.disabled = true;
+  aiStatus.textContent = 'Offline mode — AI commands disabled';
+  aiStatus.className = 'error';
+}
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────
+if (isSessionValid()) {
+  hideLock();
+  init();
+} else {
+  showLock();
+}// ── Event Listeners (This connects the button to the code) ───────────────
 submitBtn.addEventListener('click', submitCommand);
 commandInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
