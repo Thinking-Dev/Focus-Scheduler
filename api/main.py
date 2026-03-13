@@ -176,7 +176,7 @@ Return ONLY the updated JSON array.
                     json={
                         "model": "llama-3.3-70b-versatile",
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 600,
+                        "max_tokens": 2000,
                         "temperature": 0.4,
                         "stream": True,
                     },
