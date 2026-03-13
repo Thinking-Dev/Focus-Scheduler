@@ -8,7 +8,6 @@ import pytz
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -53,11 +52,18 @@ async def kv_set(key: str, value: str):
             timeout=5,
         )
 
+# ── AI Prompt completely rewritten for aggressive JSON modification ───────
 MASTER_PROMPT = """
-You are an aggressive, adaptive daily scheduler for a high school student. Your ONLY job is to take the user's command and make it happen — no excuses, no ignoring requests.
+You are the backend JSON engine for a dynamic high school scheduling app.
+Your ONLY job is to take the user's CURRENT SCHEDULE, apply their NEW COMMAND, and output the ENTIRE updated schedule.
 
-FIXED WEEKLY SCHEDULE (these cannot move)
-- School: 08:00-14:20, Mon-Fri (DO NOT WRITE THIS EVERYDAY I KNOW I HAVE SCHOOL)
+RULES:
+1. You MUST apply the user's command. If they say "add math at 5", you MUST add math at 17:00.
+2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task. Do not delete it unless asked.
+3. You MUST return the FULL list of all tasks. Do not just return the single new task.
+
+FIXED WEEKLY EVENTS (Do not overwrite these unless explicitly told to):
+- School: 08:00-14:20, Mon-Fri
 - Cello Lesson: 17:00-17:45, Monday
 - Gym: 15:30-17:30, Tuesday & Thursday
 - Robotics: 14:30-17:15, Friday
@@ -65,34 +71,12 @@ FIXED WEEKLY SCHEDULE (these cannot move)
 - Saturday Fellowship: 18:30-22:00, Saturday
 - Church: 11:30-12:30, Sunday
 
-EVERYTHING ELSE IS FLEXIBLE. If the user says move it, you move it. If the user says add it, you add it. If the user says finish by midnight, you make it fit before midnight.
-
-WHEN THE USER GIVES YOU TASKS WITH DEADLINES:
-- Figure out how much total time is needed
-- Spread that time across available slots leading up to the deadline
-- If today is the deadline, fit everything before the deadline time
-- Be aggressive — use after-school time, evenings, fill gaps
-
-SLEEP RULES
-- Ideal sleep: 23:00
-- Absolute maximum: 01:00 (only for big assignments)
-- Never schedule anything after 01:00
-
-RESPONSE RULES
-- ALWAYS do what the user asks. Never ignore a command.
-- If the user asks to move something, move it.
-- If the user gives you 3 tasks, schedule all 3.
-- If a task conflicts with a fixed event, schedule it right after.
-- Give free time at end of day ONLY after all tasks are placed.
-
-OUTPUT FORMAT — NON-NEGOTIABLE
-- Respond with ONLY a valid JSON array. No text before or after.
-- Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
-- 24-hour time. No overlaps. Sorted by date then start time.
-- Include ALL tasks for ALL days in the schedule.
+OUTPUT FORMAT:
+- Respond with ONLY a raw JSON array. No conversational text whatsoever.
+- Do NOT wrap the response in markdown blocks like ```json.
+- Format: [{"task": "Task Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
+- Use 24-hour time. Sorted chronologically.
 """
-
-rolling_log: list[str] = []
 
 class LoginRequest(BaseModel):
     password: str
@@ -147,40 +131,31 @@ async def update_schedule(req: UpdateRequest):
     if not GROQ_API_KEY:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
 
-    rolling_log.append(f"User: {req.command}")
-    if len(rolling_log) > 20:
-        rolling_log.pop(0)
-
     est = pytz.timezone("America/New_York")
     now_est = datetime.now(est)
-    current_time_str = now_est.strftime("%A, %B %d %Y - %I:%M %p EST")
+    current_time_str = now_est.strftime("%A, %B %d %Y - %H:%M EST")
     today_str = now_est.strftime("%Y-%m-%d")
+    
+    # We pass the current schedule cleanly to the AI
     current_schedule_str = json.dumps(req.current_schedule, indent=2)
-    log_str = "\n".join(rolling_log[-10:])
 
     user_prompt = f"""
---- CURRENT TIME & DATE ---
-{current_time_str}
-Today's date key: {today_str}
+CURRENT TIME: {current_time_str}
+TODAY'S DATE KEY: {today_str}
 
 --- CURRENT SCHEDULE ---
 {current_schedule_str}
 
---- RECENT LOG ---
-{log_str}
-
 --- NEW USER COMMAND ---
 {req.command}
 
-ACTION REQUIRED: 
-Modify the CURRENT SCHEDULE to perfectly accommodate the NEW USER COMMAND. 
-You must output ONLY the updated JSON array. Do not provide any conversational text.
+ACTION REQUIRED: Output the newly updated JSON array reflecting this command.
 """
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
                 headers={
                     "Authorization": f"Bearer {GROQ_API_KEY}",
                     "Content-Type": "application/json",
@@ -192,7 +167,7 @@ You must output ONLY the updated JSON array. Do not provide any conversational t
                         {"role": "user", "content": user_prompt}
                     ],
                     "max_tokens": 2000,
-                    "temperature": 0.1,
+                    "temperature": 0.2, # Bumped slightly so it doesn't freeze up
                     "stream": False,
                 },
             )
@@ -201,55 +176,33 @@ You must output ONLY the updated JSON array. Do not provide any conversational t
             data = response.json()
             raw = data["choices"][0]["message"]["content"].strip()
 
-        # Clean up Markdown backticks if the AI includes them
-        if "```" in raw:
-            parts = raw.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"):
-                    part = part[4:]
-                part = part.strip()
-                if part.startswith("["):
-                    raw = part
-                    break
-
-        # Extract just the JSON array
+        # Bulletproof JSON extraction
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
-            raise Exception(f"No JSON array found. Raw: {raw[:200]}")
+            raise Exception(f"AI did not return a valid JSON array. Raw output: {raw[:200]}")
+        
         raw = raw[start_idx:end_idx+1]
 
+        # Fix any trailing commas Llama might have hallucinaton
         raw = re.sub(r',\s*]', ']', raw)
         raw = re.sub(r',\s*}', '}', raw)
 
         schedule = json.loads(raw)
         
+        # Ensure every item has a date
         for item in schedule:
             if "date" not in item:
                 item["date"] = today_str
 
+        # Save to database
         await kv_set("focus_schedule", json.dumps(schedule))
         
         return {
-            "schedule": schedule, 
-            "log": rolling_log[-5:]
+            "schedule": schedule
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    return StreamingResponse(stream_response(), media_type="text/plain")
-
-@app.get("/api/time")
-async def get_time():
-    est = pytz.timezone("America/New_York")
-    now = datetime.now(est)
-    return {
-        "time": now.strftime("%H:%M:%S"),
-        "date": now.strftime("%A, %B %d %Y"),
-        "time_24": now.strftime("%H:%M"),
-        "date_key": now.strftime("%Y-%m-%d"),
-    }
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
