@@ -3,6 +3,9 @@ import json
 import re
 import secrets
 import httpx
+import asyncio
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 import pytz
 from fastapi import FastAPI, HTTPException, Request
@@ -35,7 +38,6 @@ SESSION_HOURS = 6
 UPSTASH_URL   = get_clean_url()
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
-# Added trust_env=False to block rogue Vercel proxy variables
 async def kv_get(key: str):
     if not UPSTASH_URL: return None
     async with httpx.AsyncClient(trust_env=False) as client:
@@ -47,7 +49,6 @@ async def kv_get(key: str):
         data = r.json()
         return data.get("result")
 
-# Added trust_env=False to block rogue Vercel proxy variables
 async def kv_set(key: str, value: str):
     if not UPSTASH_URL: return
     async with httpx.AsyncClient(trust_env=False) as client:
@@ -70,7 +71,7 @@ RULES:
 2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task. Do not delete it unless asked.
 3. You MUST return the FULL list of all tasks. Do not just return the single new task.
 
-FIXED WEEKLY EVENTS (Do not overwrite these unless explicitly told to):
+FIXED WEEKLY EVENTS:
 - School: 08:00-14:20, Mon-Fri
 - Cello Lesson: 17:00-17:45, Monday
 - Gym: 15:30-17:30, Tuesday & Thursday
@@ -156,31 +157,40 @@ async def update_schedule(req: UpdateRequest):
 
     user_prompt = f"CURRENT TIME: {current_time_str}\nTODAY'S DATE KEY: {today_str}\n\n--- CURRENT SCHEDULE ---\n{current_schedule_str}\n\n--- NEW USER COMMAND ---\n{req.command}\n\nACTION REQUIRED: Output the newly updated JSON array reflecting this command."
 
+    # ── THE NUCLEAR OPTION: Built-in urllib instead of httpx ──────────────
     try:
-        # Added trust_env=False here as well
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
-            response = await client.post(
-                "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": MASTER_PROMPT},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "max_tokens": 2000,
-                    "temperature": 0.2,
-                    "stream": False,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw = data["choices"][0]["message"]["content"].strip()
+        req_data = json.dumps({
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": MASTER_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.2,
+            "stream": False,
+        }).encode("utf-8")
+
+        req_obj = urllib.request.Request(
+            "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
+            data=req_data,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST"
+        )
+
+        def fetch_groq():
+            with urllib.request.urlopen(req_obj, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        # Run the standard library request in a thread so it doesn't block FastAPI
+        data = await asyncio.to_thread(fetch_groq)
+        raw = data["choices"][0]["message"]["content"].strip()
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Groq API Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Groq API Error (urllib): {str(e)}")
+    # ──────────────────────────────────────────────────────────────────────
 
     try:
         start_idx = raw.find("[")
