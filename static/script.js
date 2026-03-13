@@ -396,6 +396,15 @@ async function submitCommand() {
     if (schedule.length) updateFocusUI();
   }
 }
+
+// ── Event Listeners (This connects the button to the code) ───────────────
+submitBtn.addEventListener('click', submitCommand);
+commandInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submitCommand();
+  }
+});
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
   loadCachedSchedule();
