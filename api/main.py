@@ -20,19 +20,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
+def get_clean_url():
+    url = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    url = url.strip().strip("'").strip('"')
+    if url and not url.startswith("http"):
+        url = f"https://{url}"
+    if url.endswith("/"):
+        url = url[:-1]
+    return url
+
+GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "").strip().strip("'").strip('"')
 APP_PASSWORD  = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS = 6
-UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
-UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
-
-# Automatically fix the Upstash URL if the https:// is missing in Vercel
-if UPSTASH_URL and not UPSTASH_URL.startswith("http"):
-    UPSTASH_URL = f"https://{UPSTASH_URL}"
+UPSTASH_URL   = get_clean_url()
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
 async def kv_get(key: str):
-    if not UPSTASH_URL:
-        return None
+    if not UPSTASH_URL: return None
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{UPSTASH_URL}/get/{key}",
@@ -43,20 +47,19 @@ async def kv_get(key: str):
         return data.get("result")
 
 async def kv_set(key: str, value: str):
-    if not UPSTASH_URL:
-        return
+    if not UPSTASH_URL: return
     async with httpx.AsyncClient() as client:
+        # We explicitly add /pipeline to ensure httpx doesn't fail on a bare domain
         await client.post(
-            UPSTASH_URL,
+            f"{UPSTASH_URL}/pipeline",
             headers={
                 "Authorization": f"Bearer {UPSTASH_TOKEN}",
                 "Content-Type": "application/json",
             },
-            json=["SET", key, value],
+            json=[["SET", key, value]],
             timeout=5,
         )
 
-# ── AI Prompt completely rewritten for aggressive JSON modification ───────
 MASTER_PROMPT = """
 You are the backend JSON engine for a dynamic high school scheduling app.
 Your ONLY job is to take the user's CURRENT SCHEDULE, apply their NEW COMMAND, and output the ENTIRE updated schedule.
@@ -91,11 +94,9 @@ class UpdateRequest(BaseModel):
     current_schedule: list
 
 async def validate_token(token: str) -> bool:
-    if not token:
-        return False
+    if not token: return False
     data = await kv_get(f"session:{token}")
-    if not data:
-        return False
+    if not data: return False
     try:
         exp = datetime.fromisoformat(data)
         return datetime.utcnow() < exp
@@ -105,6 +106,18 @@ async def validate_token(token: str) -> bool:
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "groq_key_set": bool(GROQ_API_KEY), "upstash_set": bool(UPSTASH_URL)}
+
+# ── RESTORED: /api/time (Fixes the 404 Error) ─────────────────────────────
+@app.get("/api/time")
+async def get_time():
+    est = pytz.timezone("America/New_York")
+    now = datetime.now(est)
+    return {
+        "time": now.strftime("%H:%M:%S"),
+        "date": now.strftime("%A, %B %d %Y"),
+        "time_24": now.strftime("%H:%M"),
+        "date_key": now.strftime("%Y-%m-%d"),
+    }
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
@@ -118,8 +131,7 @@ async def login(req: LoginRequest):
 @app.get("/api/schedule")
 async def get_schedule():
     data = await kv_get("focus_schedule")
-    if data:
-        return json.loads(data)
+    if data: return json.loads(data)
     return []
 
 @app.post("/api/schedule")
@@ -140,23 +152,13 @@ async def update_schedule(req: UpdateRequest):
     current_time_str = now_est.strftime("%A, %B %d %Y - %H:%M EST")
     today_str = now_est.strftime("%Y-%m-%d")
     
-    # We pass the current schedule cleanly to the AI
     current_schedule_str = json.dumps(req.current_schedule, indent=2)
 
-    user_prompt = f"""
-CURRENT TIME: {current_time_str}
-TODAY'S DATE KEY: {today_str}
+    user_prompt = f"CURRENT TIME: {current_time_str}\nTODAY'S DATE KEY: {today_str}\n\n--- CURRENT SCHEDULE ---\n{current_schedule_str}\n\n--- NEW USER COMMAND ---\n{req.command}\n\nACTION REQUIRED: Output the newly updated JSON array reflecting this command."
 
---- CURRENT SCHEDULE ---
-{current_schedule_str}
-
---- NEW USER COMMAND ---
-{req.command}
-
-ACTION REQUIRED: Output the newly updated JSON array reflecting this command.
-"""
-
+    # ── Error Pinpointing ──────────────────────────────────────────────────
     try:
+        # Step 1: Talk to Groq AI
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
@@ -171,42 +173,40 @@ ACTION REQUIRED: Output the newly updated JSON array reflecting this command.
                         {"role": "user", "content": user_prompt}
                     ],
                     "max_tokens": 2000,
-                    "temperature": 0.2, # Bumped slightly so it doesn't freeze up
+                    "temperature": 0.2,
                     "stream": False,
                 },
             )
-            
             response.raise_for_status()
             data = response.json()
             raw = data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Groq API Error: {str(e)}")
 
-        # Bulletproof JSON extraction
+    try:
+        # Step 2: Clean the JSON
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
-            raise Exception(f"AI did not return a valid JSON array. Raw output: {raw[:200]}")
+            raise Exception(f"AI did not return a valid JSON array. Raw output: {raw[:100]}")
         
         raw = raw[start_idx:end_idx+1]
-
-        # Fix any trailing commas Llama might have hallucinaton
         raw = re.sub(r',\s*]', ']', raw)
         raw = re.sub(r',\s*}', '}', raw)
-
         schedule = json.loads(raw)
         
-        # Ensure every item has a date
         for item in schedule:
             if "date" not in item:
                 item["date"] = today_str
-
-        # Save to database
-        await kv_set("focus_schedule", json.dumps(schedule))
-        
-        return {
-            "schedule": schedule
-        }
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"JSON Parse Error: {str(e)}")
+
+    try:
+        # Step 3: Save back to Upstash
+        await kv_set("focus_schedule", json.dumps(schedule))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upstash Save Error: {str(e)}")
+
+    return {"schedule": schedule}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
