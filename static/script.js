@@ -5,9 +5,10 @@ const SCHEDULE_KEY  = 'focus_schedule';
 const RATE_LIMIT_MS = 5000;
 
 // ── State ──────────────────────────────────────────────────────────────────
-let schedule   = [];
-let serverTime = null;
-let lastSubmit = 0;
+let schedule      = [];
+let serverTime    = null;
+let serverDateKey = null;
+let lastSubmit    = 0;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -48,6 +49,14 @@ function formatDuration(minutes) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m ? `${h}h ${m}m left` : `${h}h left`;
+}
+
+function getTodayKey() {
+  if (serverDateKey) return serverDateKey;
+  // Fallback: approximate EST (UTC-5)
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utc + (-5 * 60 * 60000)).toISOString().slice(0, 10);
 }
 
 function autoGrowTextarea() {
@@ -154,7 +163,8 @@ async function syncTime() {
   try {
     const res  = await fetch('/api/time');
     const data = await res.json();
-    serverTime = data.time_24;
+    serverTime    = data.time_24;
+    serverDateKey = data.date_key;
     return data;
   } catch {
     return null;
@@ -164,10 +174,8 @@ async function syncTime() {
 function getCurrentHHMM() {
   if (serverTime) return serverTime;
   const now = new Date();
-  const estOffset = -5 * 60;
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const estDate = new Date(utc + estOffset * 60000);
-  return estDate.toTimeString().slice(0, 5);
+  return new Date(utc + (-5 * 60 * 60000)).toTimeString().slice(0, 5);
 }
 
 // ── Clock ──────────────────────────────────────────────────────────────────
@@ -195,8 +203,8 @@ function saveSchedule(s) {
 }
 
 function getCurrentTask(hhmm) {
-  const nowMins = timeToMinutes(hhmm);
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const nowMins  = timeToMinutes(hhmm);
+  const todayKey = getTodayKey();
   return schedule.find(item => {
     if (item.date && item.date !== todayKey) return false;
     const s = timeToMinutes(item.start);
@@ -207,8 +215,8 @@ function getCurrentTask(hhmm) {
 
 // ── Progress Bar ───────────────────────────────────────────────────────────
 function updateFocusUI() {
-  const hhmm = getCurrentHHMM();
-  const task = getCurrentTask(hhmm);
+  const hhmm    = getCurrentHHMM();
+  const task    = getCurrentTask(hhmm);
   const nowMins = timeToMinutes(hhmm);
 
   if (!task) {
@@ -222,15 +230,15 @@ function updateFocusUI() {
     return;
   }
 
-  taskEl.textContent = task.task;
-  taskEl.className   = '';
+  taskEl.textContent     = task.task;
+  taskEl.className       = '';
   taskTimeEl.textContent = `${task.start} – ${task.end}`;
 
-  const start   = timeToMinutes(task.start);
-  const end     = timeToMinutes(task.end);
-  const total   = end - start;
-  const elapsed = nowMins - start;
-  const pct     = Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+  const start    = timeToMinutes(task.start);
+  const end      = timeToMinutes(task.end);
+  const total    = end - start;
+  const elapsed  = nowMins - start;
+  const pct      = Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
   const minsLeft = end - nowMins;
 
   progressFill.style.width = `${pct}%`;
@@ -241,9 +249,9 @@ function updateFocusUI() {
 
 // ── Schedule Modal ─────────────────────────────────────────────────────────
 function renderScheduleModal() {
-  const hhmm    = getCurrentHHMM();
-  const nowMins = timeToMinutes(hhmm);
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const hhmm     = getCurrentHHMM();
+  const nowMins  = timeToMinutes(hhmm);
+  const todayKey = getTodayKey();
   scheduleList.innerHTML = '';
 
   if (!schedule.length) {
@@ -251,7 +259,6 @@ function renderScheduleModal() {
     return;
   }
 
-  // Group by date
   const byDate = {};
   schedule.forEach(item => {
     const d = item.date || todayKey;
@@ -260,17 +267,18 @@ function renderScheduleModal() {
   });
 
   Object.keys(byDate).sort().forEach(date => {
-    // Date header
-    const header = document.createElement('div');
+    const header  = document.createElement('div');
     const isToday = date === todayKey;
-    const label = isToday ? 'Today' : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const label   = isToday
+      ? 'Today'
+      : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     header.style.cssText = 'font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-dim);padding:12px 16px 4px;';
     header.textContent = label;
     scheduleList.appendChild(header);
 
     byDate[date].forEach(item => {
-      const s = timeToMinutes(item.start);
-      const e = timeToMinutes(item.end);
+      const s         = timeToMinutes(item.start);
+      const e         = timeToMinutes(item.end);
       const isCurrent = isToday && nowMins >= s && nowMins < e;
 
       const el = document.createElement('div');
@@ -289,7 +297,6 @@ $('see-schedule-btn').addEventListener('click', () => {
   renderScheduleModal();
   scheduleModal.classList.add('open');
 });
-
 $('close-modal').addEventListener('click', () => scheduleModal.classList.remove('open'));
 scheduleModal.addEventListener('click', e => {
   if (e.target === scheduleModal) scheduleModal.classList.remove('open');
