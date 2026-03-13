@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from groq import AsyncGroq
 
 app = FastAPI()
 
@@ -21,12 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Config ───────────────────────────────────────────────────────────────────
 GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
 APP_PASSWORD  = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS = 6
-
-# ─── Upstash Redis ────────────────────────────────────────────────────────────
 UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
@@ -56,9 +52,8 @@ async def kv_set(key: str, value: str):
             timeout=5,
         )
 
-# ─── MASTER PROMPT ────────────────────────────────────────────────────────────
 MASTER_PROMPT = """
-You are a highly efficient personal scheduler. Your job is to manage a MULTI-DAY rolling schedule for a high school student in EST (Eastern Standard Time).
+You are a highly efficient personal scheduler managing a MULTI-DAY schedule for a high school student in EST.
 
 FIXED WEEKLY SCHEDULE
 - School: 08:00-14:20, Mon-Fri
@@ -70,25 +65,20 @@ FIXED WEEKLY SCHEDULE
 - Church: 11:30-12:30, Sunday
 
 PERSONAL RULES
-- Always leave free time at the end of each day for friends and fun.
+- Always leave free time at end of day for friends and fun.
 - Target sleep at 23:00. Flexible up to 01:00 only for big assignments.
-- Protect weekends: front-load hard work on weekdays.
+- Protect weekends, front-load work on weekdays.
 - NEVER cram everything into one day. Spread work across days leading up to deadlines.
-- For multi-day tasks: break into small daily chunks.
-- Prioritize urgent + important tasks first.
-- If the user finishes something early, give back free time.
+- Break multi-day tasks into small daily chunks.
 
 OUTPUT FORMAT - CRITICAL
 - Respond ONLY with a valid JSON array. Zero prose. No markdown. No explanation.
-- Each item must have exactly: "task", "start", "end", and "date" fields.
 - Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
 - 24-hour time. No overlaps within a day. Sorted by date then start time.
 """
 
-# ─── Rolling log ──────────────────────────────────────────────────────────────
 rolling_log: list[str] = []
 
-# ─── Pydantic models ──────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
     password: str
 
@@ -97,7 +87,6 @@ class UpdateRequest(BaseModel):
     command: str
     current_schedule: list
 
-# ─── Session helpers ──────────────────────────────────────────────────────────
 async def validate_token(token: str) -> bool:
     if not token:
         return False
@@ -110,7 +99,9 @@ async def validate_token(token: str) -> bool:
     except Exception:
         return False
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "groq_key_set": bool(GROQ_API_KEY), "upstash_set": bool(UPSTASH_URL)}
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
@@ -121,7 +112,6 @@ async def login(req: LoginRequest):
     await kv_set(f"session:{token}", exp.isoformat())
     return {"token": token, "expires_in": SESSION_HOURS * 3600}
 
-
 @app.get("/api/schedule")
 async def get_schedule():
     data = await kv_get("focus_schedule")
@@ -129,13 +119,11 @@ async def get_schedule():
         return json.loads(data)
     return []
 
-
 @app.post("/api/schedule")
 async def save_schedule(request: Request):
     schedule_data = await request.json()
     await kv_set("focus_schedule", json.dumps(schedule_data))
     return {"success": True}
-
 
 @app.post("/api/update-schedule")
 async def update_schedule(req: UpdateRequest):
@@ -143,8 +131,6 @@ async def update_schedule(req: UpdateRequest):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
     if not GROQ_API_KEY:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
-
-    client = AsyncGroq(api_key=GROQ_API_KEY)
 
     rolling_log.append(f"User: {req.command}")
     if len(rolling_log) > 20:
@@ -163,37 +149,49 @@ async def update_schedule(req: UpdateRequest):
 {current_time_str}
 Today's date key: {today_str}
 
---- CURRENT MULTI-DAY SCHEDULE ---
+--- CURRENT SCHEDULE ---
 {current_schedule_str}
 
---- RECENT COMMAND LOG ---
+--- RECENT LOG ---
 {log_str}
 
---- USER'S LATEST COMMAND ---
+--- USER COMMAND ---
 {req.command}
 
-Spread work across multiple days if deadlines are mentioned.
-Return ONLY the updated JSON array with all days included.
+Return ONLY the updated JSON array.
 """
 
     async def stream_response():
         full_text = ""
         try:
-            stream = await client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
-                temperature=0.4,
-                stream=True,
-            )
+            # Call Groq directly via HTTP to avoid any import issues
+            async with httpx.AsyncClient(timeout=30) as client:
+                async with client.stream(
+                    "POST",
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 600,
+                        "temperature": 0.4,
+                        "stream": True,
+                    },
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                chunk = json.loads(line[6:])
+                                content = chunk["choices"][0]["delta"].get("content", "")
+                                if content:
+                                    full_text += content
+                                    yield " "
+                            except Exception:
+                                pass
 
-            async for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    full_text += content
-                    yield " "  # heartbeat to keep Vercel alive
-
-            # Strip markdown fences if present
             raw = full_text.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
@@ -210,14 +208,12 @@ Return ONLY the updated JSON array with all days included.
                     item["date"] = today_str
 
             await kv_set("focus_schedule", json.dumps(schedule))
-
             yield "\n__SCHEDULE__" + json.dumps({"schedule": schedule, "log": rolling_log[-5:]})
 
         except Exception as e:
             yield "\n__ERROR__" + json.dumps({"detail": str(e)})
 
     return StreamingResponse(stream_response(), media_type="text/plain")
-
 
 @app.get("/api/time")
 async def get_time():
@@ -229,11 +225,5 @@ async def get_time():
         "time_24": now.strftime("%H:%M"),
         "date_key": now.strftime("%Y-%m-%d"),
     }
-
-
-@app.get("/api/health")
-async def health():
-    return {"status": "ok"}
-
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
