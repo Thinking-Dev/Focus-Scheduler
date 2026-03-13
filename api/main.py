@@ -26,6 +26,10 @@ SESSION_HOURS = 6
 UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
+# Automatically fix the Upstash URL if the https:// is missing in Vercel
+if UPSTASH_URL and not UPSTASH_URL.startswith("http"):
+    UPSTASH_URL = f"https://{UPSTASH_URL}"
+
 async def kv_get(key: str):
     if not UPSTASH_URL:
         return None
