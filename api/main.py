@@ -35,9 +35,10 @@ SESSION_HOURS = 6
 UPSTASH_URL   = get_clean_url()
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
+# Added trust_env=False to block rogue Vercel proxy variables
 async def kv_get(key: str):
     if not UPSTASH_URL: return None
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(trust_env=False) as client:
         r = await client.get(
             f"{UPSTASH_URL}/get/{key}",
             headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
@@ -46,10 +47,10 @@ async def kv_get(key: str):
         data = r.json()
         return data.get("result")
 
+# Added trust_env=False to block rogue Vercel proxy variables
 async def kv_set(key: str, value: str):
     if not UPSTASH_URL: return
-    async with httpx.AsyncClient() as client:
-        # We explicitly add /pipeline to ensure httpx doesn't fail on a bare domain
+    async with httpx.AsyncClient(trust_env=False) as client:
         await client.post(
             f"{UPSTASH_URL}/pipeline",
             headers={
@@ -107,7 +108,6 @@ async def validate_token(token: str) -> bool:
 async def health():
     return {"status": "ok", "groq_key_set": bool(GROQ_API_KEY), "upstash_set": bool(UPSTASH_URL)}
 
-# ── RESTORED: /api/time (Fixes the 404 Error) ─────────────────────────────
 @app.get("/api/time")
 async def get_time():
     est = pytz.timezone("America/New_York")
@@ -156,10 +156,9 @@ async def update_schedule(req: UpdateRequest):
 
     user_prompt = f"CURRENT TIME: {current_time_str}\nTODAY'S DATE KEY: {today_str}\n\n--- CURRENT SCHEDULE ---\n{current_schedule_str}\n\n--- NEW USER COMMAND ---\n{req.command}\n\nACTION REQUIRED: Output the newly updated JSON array reflecting this command."
 
-    # ── Error Pinpointing ──────────────────────────────────────────────────
     try:
-        # Step 1: Talk to Groq AI
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Added trust_env=False here as well
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             response = await client.post(
                 "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
                 headers={
@@ -184,7 +183,6 @@ async def update_schedule(req: UpdateRequest):
         raise HTTPException(status_code=500, detail=f"Groq API Error: {str(e)}")
 
     try:
-        # Step 2: Clean the JSON
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
@@ -202,7 +200,6 @@ async def update_schedule(req: UpdateRequest):
         raise HTTPException(status_code=500, detail=f"JSON Parse Error: {str(e)}")
 
     try:
-        # Step 3: Save back to Upstash
         await kv_set("focus_schedule", json.dumps(schedule))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upstash Save Error: {str(e)}")
