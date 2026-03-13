@@ -199,7 +199,72 @@ Return ONLY the updated JSON array.
                         if line.startswith("data: ") and line != "data: [DONE]":
                             try:
                                 chunk = json.loads(line[6:])
-                                content = chunk["choices"][0]["delta"].get("content", "")
+                                content = chunk["choices"][0]["delta"].get("conten@app.post("/api/update-schedule")
+async def update_schedule(req: UpdateRequest):
+    if not await validate_token(req.token):
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
+
+    rolling_log.append(f"User: {req.command}")
+    if len(rolling_log) > 20:
+        rolling_log.pop(0)
+
+    est = pytz.timezone("America/New_York")
+    now_est = datetime.now(est)
+    current_time_str = now_est.strftime("%A, %B %d %Y - %I:%M %p EST")
+    today_str = now_est.strftime("%Y-%m-%d")
+    current_schedule_str = json.dumps(req.current_schedule, indent=2)
+    log_str = "\n".join(rolling_log[-10:])
+
+    # 1. Update the persona slightly in MASTER_PROMPT (Do this where you defined it at the top of your file)
+    # "You are an obedient, highly adaptive daily scheduler..."
+
+    # 2. Isolate the user's specific context for this request
+    user_prompt = f"""
+--- CURRENT TIME & DATE ---
+{current_time_str}
+Today's date key: {today_str}
+
+--- CURRENT SCHEDULE ---
+{current_schedule_str}
+
+--- RECENT LOG ---
+{log_str}
+
+--- NEW USER COMMAND ---
+{req.command}
+
+ACTION REQUIRED: 
+Modify the CURRENT SCHEDULE to perfectly accommodate the NEW USER COMMAND. 
+You must output ONLY the updated JSON array. Do not provide any conversational text.
+"""
+
+    async def stream_response():
+        full_text = ""
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                async with client.stream(
+                    "POST",
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        # 3. SPLIT THE ROLES HERE
+                        "messages": [
+                            {"role": "system", "content": MASTER_PROMPT},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "max_tokens": 2000,
+                        # 4. LOWER THE TEMPERATURE HERE
+                        "temperature": 0.1, 
+                        "stream": True,
+                    },
+                ) as response:
+                    # ... Keep the rest of your streaming and parsing logic exactly the same ...t", "")
                                 if content:
                                     full_text += content
                                     yield " "
