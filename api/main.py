@@ -112,7 +112,10 @@ async def health():
         "groq_key_set": bool(GROQ_API_KEY),
         "upstash_set": bool(UPSTASH_URL),
     }
-
+# ── Clear command ──────────────────────────────────────────────────────
+    if req.command.strip().lower() == "clear":
+        await kv_set("focus_schedule", json.dumps([]))
+        return {"schedule": []}
 @app.get("/api/time")
 async def get_time():
     est = pytz.timezone("America/New_York")
