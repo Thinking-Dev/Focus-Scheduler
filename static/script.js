@@ -311,7 +311,35 @@ $('see-schedule-btn').addEventListener('click', () => {
   renderScheduleModal();
   scheduleModal.classList.add('open');
 });
-$('close-modal').addEventListener('click', () => scheduleModal.classList.remove('open'));
+$('template-btn').addEventListener('click', () => {
+  const now = new Date();
+  const day = now.toLocaleDateString('en-US', { weekday: 'long' });
+  const month = now.toLocaleDateString('en-US', { month: 'long' });
+  const date = now.getDate();
+  const time = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+
+  commandInput.value =
+`Today is ${day}, ${month} ${date}. Current time is ${time} EST.
+
+TESTS (study BEFORE the date, do NOT schedule anything on the test day):
+- [Subject] test ON [Day Month Date] → [X] study sessions of [X] min each
+
+HOMEWORK (do it 1-2 days before, one session only):
+- [Assignment name] due [Day Month Date] → [X] min
+
+PROJECTS (spread across multiple days, finish 2 days before due):
+- [Project name] due [Day Month Date] → [X] sessions of [X] min
+
+EXTRA NOTES:
+- [e.g. I already finished X]
+- [e.g. Keep Thursday light]
+
+Please spread everything out, do not repeat tasks across many days, and keep my fixed weekly schedule intact.`;
+
+  autoGrowTextarea();
+  commandInput.focus();
+  showToast('Template loaded — fill in your assignments!');
+});
 scheduleModal.addEventListener('click', e => {
   if (e.target === scheduleModal) scheduleModal.classList.remove('open');
 });
