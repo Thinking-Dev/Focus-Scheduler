@@ -63,8 +63,10 @@ RULES:
 1. You MUST apply the user's command. If they say "add math at 5", you MUST add math at 17:00.
 2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task.
 3. You MUST return the FULL list of all tasks for all days.
-4. If the user gives a deadline, schedule all required tasks BEFORE that deadline.
-5. Never ignore a command. Never refuse. Just do it.
+4. DEADLINES: When the user says something is "due" on a date, that means it must be COMPLETED BEFORE that day — not on that day. Schedule the work in the days LEADING UP to the due date. For example, if Bio test is due/on Monday, study for it on Thursday, Friday, Saturday, and Sunday BEFORE Monday. The due date itself should only have the actual event (like the test) if it's a test, or nothing if it's a submission.
+5. SPREAD THE WORK: Never put all assignments on the same day. Distribute them across available evenings leading up to each deadline. A 45-min task should be one session. A big project should be split into multiple sessions across multiple days.
+6. TODAY vs DUE DATE: If something is due tomorrow, work on it today. If due in 5 days, spread it across the next 3-4 days.
+7. Never ignore a command. Never refuse. Just do it.
 
 FIXED WEEKLY EVENTS (cannot move):
 - School: 08:00-14:20, Mon-Fri
