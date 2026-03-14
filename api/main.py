@@ -4,8 +4,6 @@ import re
 import secrets
 import httpx
 import asyncio
-import urllib.request
-import urllib.error
 from datetime import datetime, timedelta
 import pytz
 from fastapi import FastAPI, HTTPException, Request
@@ -23,23 +21,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_clean_url():
-    url = os.environ.get("UPSTASH_REDIS_REST_URL", "")
-    url = url.strip().strip("'").strip('"')
-    if url and not url.startswith("http"):
-        url = f"https://{url}"
-    if url.endswith("/"):
-        url = url[:-1]
-    return url
-
 GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "").strip().strip("'").strip('"')
 APP_PASSWORD  = os.environ.get("APP_PASSWORD", "focus123")
 SESSION_HOURS = 6
-UPSTASH_URL   = get_clean_url()
+UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().strip("'").strip('"').rstrip("/")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 async def kv_get(key: str):
-    if not UPSTASH_URL: return None
+    if not UPSTASH_URL:
+        return None
     async with httpx.AsyncClient(trust_env=False) as client:
         r = await client.get(
             f"{UPSTASH_URL}/get/{key}",
@@ -50,7 +42,8 @@ async def kv_get(key: str):
         return data.get("result")
 
 async def kv_set(key: str, value: str):
-    if not UPSTASH_URL: return
+    if not UPSTASH_URL:
+        return
     async with httpx.AsyncClient(trust_env=False) as client:
         await client.post(
             f"{UPSTASH_URL}/pipeline",
@@ -68,10 +61,12 @@ Your ONLY job is to take the user's CURRENT SCHEDULE, apply their NEW COMMAND, a
 
 RULES:
 1. You MUST apply the user's command. If they say "add math at 5", you MUST add math at 17:00.
-2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task. Do not delete it unless asked.
-3. You MUST return the FULL list of all tasks. Do not just return the single new task.
+2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task.
+3. You MUST return the FULL list of all tasks for all days.
+4. If the user gives a deadline, schedule all required tasks BEFORE that deadline.
+5. Never ignore a command. Never refuse. Just do it.
 
-FIXED WEEKLY EVENTS:
+FIXED WEEKLY EVENTS (cannot move):
 - School: 08:00-14:20, Mon-Fri
 - Cello Lesson: 17:00-17:45, Monday
 - Gym: 15:30-17:30, Tuesday & Thursday
@@ -80,11 +75,14 @@ FIXED WEEKLY EVENTS:
 - Saturday Fellowship: 18:30-22:00, Saturday
 - Church: 11:30-12:30, Sunday
 
-OUTPUT FORMAT:
-- Respond with ONLY a raw JSON array. No conversational text whatsoever.
-- Do NOT wrap the response in markdown blocks like ```json.
-- Format: [{"task": "Task Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
-- Use 24-hour time. Sorted chronologically.
+SLEEP: Target 23:00, hard limit 01:00. Nothing after 01:00.
+WEEKENDS: Keep light. Front-load work on weekdays.
+FREE TIME: Always leave some at end of day AFTER all tasks are placed.
+
+OUTPUT FORMAT - NON-NEGOTIABLE:
+- Respond with ONLY a raw JSON array. No text before or after. No markdown.
+- Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
+- 24-hour time. No overlaps within a day. Sorted by date then start time.
 """
 
 class LoginRequest(BaseModel):
@@ -96,9 +94,11 @@ class UpdateRequest(BaseModel):
     current_schedule: list
 
 async def validate_token(token: str) -> bool:
-    if not token: return False
+    if not token:
+        return False
     data = await kv_get(f"session:{token}")
-    if not data: return False
+    if not data:
+        return False
     try:
         exp = datetime.fromisoformat(data)
         return datetime.utcnow() < exp
@@ -107,7 +107,11 @@ async def validate_token(token: str) -> bool:
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "groq_key_set": bool(GROQ_API_KEY), "upstash_set": bool(UPSTASH_URL)}
+    return {
+        "status": "ok",
+        "groq_key_set": bool(GROQ_API_KEY),
+        "upstash_set": bool(UPSTASH_URL),
+    }
 
 @app.get("/api/time")
 async def get_time():
@@ -132,7 +136,8 @@ async def login(req: LoginRequest):
 @app.get("/api/schedule")
 async def get_schedule():
     data = await kv_get("focus_schedule")
-    if data: return json.loads(data)
+    if data:
+        return json.loads(data)
     return []
 
 @app.post("/api/schedule")
@@ -152,68 +157,60 @@ async def update_schedule(req: UpdateRequest):
     now_est = datetime.now(est)
     current_time_str = now_est.strftime("%A, %B %d %Y - %H:%M EST")
     today_str = now_est.strftime("%Y-%m-%d")
-    
-    current_schedule_str = json.dumps(req.current_schedule, indent=2)
 
-    user_prompt = f"CURRENT TIME: {current_time_str}\nTODAY'S DATE KEY: {today_str}\n\n--- CURRENT SCHEDULE ---\n{current_schedule_str}\n\n--- NEW USER COMMAND ---\n{req.command}\n\nACTION REQUIRED: Output the newly updated JSON array reflecting this command."
+    user_prompt = f"""CURRENT TIME: {current_time_str}
+TODAY'S DATE KEY: {today_str}
 
-    # ── THE NUCLEAR OPTION: Built-in urllib instead of httpx ──────────────
+--- CURRENT SCHEDULE ---
+{json.dumps(req.current_schedule, indent=2)}
+
+--- NEW USER COMMAND ---
+{req.command}
+
+Output the updated JSON array now."""
+
     try:
-        req_data = json.dumps({
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": MASTER_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ],
-            "max_tokens": 2000,
-            "temperature": 0.2,
-            "stream": False,
-        }).encode("utf-8")
-
-        req_obj = urllib.request.Request(
-            "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
-            data=req_data,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            method="POST"
-        )
-
-        def fetch_groq():
-            with urllib.request.urlopen(req_obj, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
-
-        # Run the standard library request in a thread so it doesn't block FastAPI
-        data = await asyncio.to_thread(fetch_groq)
+        async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
+            response = await client.post(
+                GROQ_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": MASTER_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 2000,
+                    "temperature": 0.7,
+                    "stream": False,
+                },
+            )
+        data = response.json()
+        if "error" in data:
+            raise Exception(data["error"].get("message", str(data["error"])))
         raw = data["choices"][0]["message"]["content"].strip()
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Groq API Error (urllib): {str(e)}")
-    # ──────────────────────────────────────────────────────────────────────
+        raise HTTPException(status_code=500, detail=f"Groq API Error: {str(e)}")
 
     try:
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
-            raise Exception(f"AI did not return a valid JSON array. Raw output: {raw[:100]}")
-        
-        raw = raw[start_idx:end_idx+1]
+            raise Exception(f"No JSON array in response. Raw: {raw[:150]}")
+        raw = raw[start_idx:end_idx + 1]
         raw = re.sub(r',\s*]', ']', raw)
         raw = re.sub(r',\s*}', '}', raw)
         schedule = json.loads(raw)
-        
         for item in schedule:
             if "date" not in item:
                 item["date"] = today_str
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JSON Parse Error: {str(e)}")
 
-    try:
-        await kv_set("focus_schedule", json.dumps(schedule))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upstash Save Error: {str(e)}")
-
+    await kv_set("focus_schedule", json.dumps(schedule))
     return {"schedule": schedule}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
