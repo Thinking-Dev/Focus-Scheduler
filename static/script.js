@@ -11,7 +11,7 @@ let serverDateKey = null;
 let lastSubmit    = 0;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
-const $  = id => document.getElementById(id);
+const $ = id => document.getElementById(id);
 const overlay          = $('password-overlay');
 const passwordInput    = $('password-input');
 const unlockBtn        = $('unlock-btn');
@@ -53,7 +53,6 @@ function formatDuration(minutes) {
 
 function getTodayKey() {
   if (serverDateKey) return serverDateKey;
-  // Fallback: approximate EST (UTC-5)
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   return new Date(utc + (-5 * 60 * 60000)).toISOString().slice(0, 10);
@@ -86,7 +85,7 @@ function clearSession() {
 function getToken() { return localStorage.getItem(SESSION_KEY); }
 
 function checkSessionExpiry() {
-  if (!isSessionValid() && !overlay.classList.contains('hidden')) {
+  if (!isSessionValid() && overlay.classList.contains('hidden')) {
     clearSession();
     showLock('Session expired. Please log in again.');
   }
@@ -146,7 +145,7 @@ async function attemptLogin() {
       lockError.style.color = 'var(--warning)';
       setTimeout(() => { hideLock(); initOffline(); }, 1500);
     } else {
-      lockError.textContent = `Cannot connect to server: ${err.message}`;
+      lockError.textContent = `Cannot connect: ${err.message}`;
       lockError.classList.add('visible');
     }
   } finally {
@@ -178,12 +177,27 @@ function getCurrentHHMM() {
   return new Date(utc + (-5 * 60 * 60000)).toTimeString().slice(0, 5);
 }
 
+// ── Cloud Schedule Sync ────────────────────────────────────────────────────
+async function syncScheduleFromCloud() {
+  try {
+    const res = await fetch('/api/schedule');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.length > 0) {
+      saveSchedule(data);
+      updateFocusUI();
+    }
+  } catch {
+    // silently fall back to localStorage
+  }
+}
+
 // ── Clock ──────────────────────────────────────────────────────────────────
 function startClock() {
   function tick() {
     const now = new Date();
-    clockEl.textContent = now.toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    dateEl.textContent  = now.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+    clockEl.textContent = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    dateEl.textContent  = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   }
   tick();
   return setInterval(tick, 1000);
@@ -220,9 +234,9 @@ function updateFocusUI() {
   const nowMins = timeToMinutes(hhmm);
 
   if (!task) {
-    taskEl.textContent = 'Free Time';
-    taskEl.className   = 'free-time';
-    taskTimeEl.textContent = '';
+    taskEl.textContent       = 'Free Time';
+    taskEl.className         = 'free-time';
+    taskTimeEl.textContent   = '';
     progressFill.style.width = '0%';
     progressFill.classList.remove('active');
     progressPct.textContent  = '—';
@@ -306,26 +320,17 @@ scheduleModal.addEventListener('click', e => {
 async function submitCommand() {
   const cmd = commandInput.value.trim();
   if (!cmd) return;
-  
   if (Date.now() - lastSubmit < RATE_LIMIT_MS) {
     showToast('Please wait a moment before sending another request');
     return;
   }
-  
-  if (!isSessionValid()) { 
-    showLock('Session expired'); 
-    return; 
-  }
+  if (!isSessionValid()) { showLock('Session expired'); return; }
 
   lastSubmit = Date.now();
-  
-  // 1. Lock UI while thinking
   submitBtn.disabled = true;
-  commandInput.disabled = true; 
   submitBtn.classList.add('loading');
   aiStatus.className = '';
-  
-  // Rate limit cooldown timer
+
   let countdown = RATE_LIMIT_MS / 1000;
   const timer = setInterval(() => {
     countdown--;
@@ -337,7 +342,7 @@ async function submitCommand() {
   }, 1000);
 
   try {
-    aiStatus.textContent = 'Step 1/3: Sending request…';
+    aiStatus.textContent = 'Thinking…';
 
     const res = await fetch('/api/update-schedule', {
       method: 'POST',
@@ -345,11 +350,9 @@ async function submitCommand() {
       body: JSON.stringify({
         token: getToken(),
         command: cmd,
-        current_schedule: schedule, 
+        current_schedule: schedule,
       }),
     });
-
-    aiStatus.textContent = `Step 2/3: Got HTTP ${res.status}…`;
 
     if (res.status === 401) {
       clearSession();
@@ -358,50 +361,35 @@ async function submitCommand() {
     }
 
     if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(`HTTP ${res.status}: ${errData.detail || 'Unknown server error'}`);
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
     }
 
-    aiStatus.textContent = 'Step 3/3: Updating schedule…';
-    
     const data = await res.json();
-    
+
     if (!data.schedule) {
-        throw new Error("Backend returned success but no schedule data was found.");
+      throw new Error('No schedule in response');
     }
 
-    // Save and update UI
     saveSchedule(data.schedule);
     updateFocusUI();
-    
-    // Cleanup UI
     commandInput.value = '';
     autoGrowTextarea();
     aiStatus.textContent = '✓ Schedule updated';
     aiStatus.className = 'success';
+    setTimeout(() => { aiStatus.textContent = ''; aiStatus.className = ''; }, 3000);
     showToast('Schedule updated');
-    
-    setTimeout(() => { 
-        aiStatus.textContent = ''; 
-        aiStatus.className = ''; 
-    }, 3000);
 
   } catch (err) {
     aiStatus.textContent = `❌ ${err.message}`;
     aiStatus.className = 'error';
     console.error('Full error:', err);
     showToast(err.message.slice(0, 100), 6000);
-    
     loadCachedSchedule();
     if (schedule.length) updateFocusUI();
-  } finally {
-    // 2. GUARANTEE the text box unlocks, even if an error occurs
-    commandInput.disabled = false;
-    commandInput.focus();
   }
 }
 
-// ── Event Listeners ────────────────────────────────────────────────────────
 submitBtn.addEventListener('click', submitCommand);
 commandInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -412,47 +400,14 @@ commandInput.addEventListener('keydown', e => {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  loadCachedSchedule();
-  await syncTime();
+  loadCachedSchedule();         // load local cache immediately so UI isn't blank
+  await syncTime();             // get EST time from server
   startClock();
+  await syncScheduleFromCloud(); // pull latest schedule from Upstash (cross-device sync)
   updateFocusUI();
-  setInterval(async () => { await syncTime(); }, 30000);
-  setInterval(updateFocusUI, 10000);
-  setInterval(checkSessionExpiry, 60000);
-  checkSessionExpiry();
-}
 
-function initOffline() {
-  loadCachedSchedule();
-  startClock();
-  updateFocusUI();
-  setInterval(updateFocusUI, 10000);
-  submitBtn.disabled = true;
-  aiStatus.textContent = 'Offline mode — AI commands disabled';
-  aiStatus.className = 'error';
-}
-
-// ── Bootstrap ──────────────────────────────────────────────────────────────
-if (isSessionValid()) {
-  hideLock();
-  init();
-} else {
-  showLock();
-}// ── Event Listeners (This connects the button to the code) ───────────────
-submitBtn.addEventListener('click', submitCommand);
-commandInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    submitCommand();
-  }
-});
-// ── Init ───────────────────────────────────────────────────────────────────
-async function init() {
-  loadCachedSchedule();
-  await syncTime();
-  startClock();
-  updateFocusUI();
   setInterval(async () => { await syncTime(); }, 30000);
+  setInterval(async () => { await syncScheduleFromCloud(); updateFocusUI(); }, 60000);
   setInterval(updateFocusUI, 10000);
   setInterval(checkSessionExpiry, 60000);
   checkSessionExpiry();
