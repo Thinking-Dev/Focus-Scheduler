@@ -3,7 +3,6 @@ import json
 import re
 import secrets
 import httpx
-import asyncio
 from datetime import datetime, timedelta
 import pytz
 from fastapi import FastAPI, HTTPException, Request
@@ -21,13 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "").strip().strip("'").strip('"')
-APP_PASSWORD  = os.environ.get("APP_PASSWORD", "focus123")
-SESSION_HOURS = 6
-UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().strip("'").strip('"').rstrip("/")
-UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip().strip("'").strip('"')
+APP_PASSWORD   = os.environ.get("APP_PASSWORD", "focus123")
+SESSION_HOURS  = 6
+UPSTASH_URL    = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().strip("'").strip('"').rstrip("/")
+UPSTASH_TOKEN  = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
 async def kv_get(key: str):
     if not UPSTASH_URL:
@@ -73,10 +72,8 @@ RULES:
 1. You MUST apply the user's command. If they say "add math at 5", you MUST add math at 17:00.
 2. If a new task overlaps with an existing flexible task, SHIFT or RESCHEDULE the flexible task.
 3. You MUST return the FULL list of all tasks for all days.
-4. DEADLINES: When the user says something is "due" on a date, that means it must be COMPLETED BEFORE that day — not on that day. Schedule the work in the days LEADING UP to the due date. For example, if Bio test is due/on Monday, study for it on Thursday, Friday, Saturday, and Sunday BEFORE Monday. The due date itself should only have the actual event (like the test) if it's a test, or nothing if it's a submission.
-5. SPREAD THE WORK: Never put all assignments on the same day. Distribute them across available evenings leading up to each deadline. A 45-min task should be one session. A big project should be split into multiple sessions across multiple days.
-6. TODAY vs DUE DATE: If something is due tomorrow, work on it today. If due in 5 days, spread it across the next 3-4 days.
-7. Never ignore a command. Never refuse. Just do it.
+4. If the user gives a deadline, schedule all required tasks BEFORE that deadline.
+5. Never ignore a command. Never refuse. Just do it.
 
 FIXED WEEKLY EVENTS (cannot move):
 - School: 08:00-14:20, Mon-Fri
@@ -91,10 +88,11 @@ SLEEP: Target 23:00, hard limit 01:00. Nothing after 01:00.
 WEEKENDS: Keep light. Front-load work on weekdays.
 FREE TIME: Always leave some at end of day AFTER all tasks are placed.
 
-OUTPUT FORMAT - NON-NEGOTIABLE:
-- Respond with ONLY a raw JSON array. No text before or after. No markdown.
+OUTPUT FORMAT — NON-NEGOTIABLE:
+- Respond with ONLY a raw JSON array. No text before or after. No markdown fences.
 - Format: [{"task": "Name", "start": "HH:MM", "end": "HH:MM", "date": "YYYY-MM-DD"}]
 - 24-hour time. No overlaps within a day. Sorted by date then start time.
+- Include ALL tasks for ALL days in the schedule.
 """
 
 class LoginRequest(BaseModel):
@@ -121,13 +119,10 @@ async def validate_token(token: str) -> bool:
 async def health():
     return {
         "status": "ok",
-        "groq_key_set": bool(GROQ_API_KEY),
+        "gemini_key_set": bool(GEMINI_API_KEY),
         "upstash_set": bool(UPSTASH_URL),
     }
-# ── Clear command ──────────────────────────────────────────────────────
-    if req.command.strip().lower() == "clear":
-        await kv_set("focus_schedule", json.dumps([]))
-        return {"schedule": []}
+
 @app.get("/api/time")
 async def get_time():
     est = pytz.timezone("America/New_York")
@@ -165,15 +160,22 @@ async def save_schedule(request: Request):
 async def update_schedule(req: UpdateRequest):
     if not await validate_token(req.token):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+
+    # ── Clear command ──────────────────────────────────────────────────────
+    if req.command.strip().lower() == "clear":
+        await kv_set("focus_schedule", json.dumps([]))
+        return {"schedule": []}
 
     est = pytz.timezone("America/New_York")
     now_est = datetime.now(est)
     current_time_str = now_est.strftime("%A, %B %d %Y - %H:%M EST")
     today_str = now_est.strftime("%Y-%m-%d")
 
-    user_prompt = f"""CURRENT TIME: {current_time_str}
+    full_prompt = f"""{MASTER_PROMPT}
+
+CURRENT TIME: {current_time_str}
 TODAY'S DATE KEY: {today_str}
 
 --- CURRENT SCHEDULE ---
@@ -182,37 +184,34 @@ TODAY'S DATE KEY: {today_str}
 --- NEW USER COMMAND ---
 {req.command}
 
-Output the updated JSON array now."""
+Output the updated JSON array now. No markdown. No explanation. Just the JSON array."""
 
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
             response = await client.post(
-                GROQ_URL,
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                headers={"Content-Type": "application/json"},
                 json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": MASTER_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "max_tokens": 2000,
-                    "temperature": 0.7,
-                    "stream": False,
+                    "contents": [{"parts": [{"text": full_prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 2000,
+                        "temperature": 0.2,
+                    },
                 },
             )
         data = response.json()
+
         if "error" in data:
             raise Exception(data["error"].get("message", str(data["error"])))
-        raw = data["choices"][0]["message"]["content"].strip()
+
+        raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Groq API Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gemini API Error: {str(e)}")
 
     try:
         start_idx = raw.find("[")
-        end_idx = raw.rfind("]")
+        end_idx   = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
             raise Exception(f"No JSON array in response. Raw: {raw[:150]}")
         raw = raw[start_idx:end_idx + 1]
