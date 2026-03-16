@@ -26,7 +26,7 @@ SESSION_HOURS  = 6
 UPSTASH_URL    = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().strip("'").strip('"').rstrip("/")
 UPSTASH_TOKEN  = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip().strip("'").strip('"')
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent"
 
 async def kv_get(key: str):
     if not UPSTASH_URL:
