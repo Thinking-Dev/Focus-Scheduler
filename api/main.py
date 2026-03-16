@@ -210,7 +210,7 @@ Output the updated JSON array now. No markdown. No explanation. Just the JSON ar
         raise HTTPException(status_code=500, detail=f"Gemini API Error: {str(e)}")
 
     try:
-        s# Strip markdown fences
+        # Strip markdown fences
         if "```" in raw:
             raw = re.sub(r'```json\s*', '', raw)
             raw = re.sub(r'```\s*', '', raw)
