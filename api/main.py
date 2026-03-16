@@ -194,7 +194,7 @@ Output the updated JSON array now. No markdown. No explanation. Just the JSON ar
                 json={
                     "contents": [{"parts": [{"text": full_prompt}]}],
                     "generationConfig": {
-                        "maxOutputTokens": 2000,
+                        "maxOutputTokens": 8000,
                         "temperature": 0.2,
                     },
                 },
@@ -210,6 +210,12 @@ Output the updated JSON array now. No markdown. No explanation. Just the JSON ar
         raise HTTPException(status_code=500, detail=f"Gemini API Error: {str(e)}")
 
     try:
+        s# Strip markdown fences
+        if "```" in raw:
+            raw = re.sub(r'```json\s*', '', raw)
+            raw = re.sub(r'```\s*', '', raw)
+            raw = raw.strip()
+
         start_idx = raw.find("[")
         end_idx   = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
